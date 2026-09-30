@@ -1,0 +1,160 @@
+#Libraries
+library(dplyr)
+library(ggplot2)
+library(forcats)
+library(lme4)
+#Functions
+read_and_clean <- function(f) {
+  df <- readr::read_csv(f, show_col_types = FALSE, col_types = readr::cols(.default = "c")) %>%
+    janitor::clean_names() %>%
+    dplyr::mutate(
+      source_file = basename(f),
+      n = dplyr::row_number()
+    )
+}
+
+
+#ERROR FIG 1: SAM2 CORRECTNESS
+sam2_correct <- read.csv("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/data/error/json_files/sam2_correct.csv")
+
+e1 <- sam2_correct %>%
+  ggplot(aes(x = prop_correct_checked)) +
+  geom_histogram(fill = "#56B4E9", color = "#FFFFFF", binwidth = 0.1) +
+  labs(x = "Proportion of correct masks", y = "Frequency") +
+  theme_classic(base_size = 40)
+
+1- mean(sam2_correct$prop_correct)
+
+ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/sam2_correct.png", plot = e1, width = 10, height = 10)
+
+#ERROR FIG 2: IMAGE REGISTRATION
+model_error <- read.csv("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/data/error/model_error.csv")
+
+model_error$p_sparse <- as.numeric(model_error$p_sparse)
+e2 <- model_error %>%
+  ggplot(aes(x=p_sparse)) +
+  geom_histogram(fill = "#56B4E9", color = "#FFFFFF", binwidth = 0.1) +
+  labs(x = "Proportion of images registered", y = "Frequency") +
+  theme_classic(base_size = 40)
+
+mean(model_error$p_sparse, na.rm=TRUE)
+
+ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/e2_image_registration.png", plot = e2, width = 10, height = 10)
+
+#ERROR FIG 3: REPROJECTION ERROR OF POINT CLOUD
+e3 <- model_error %>%
+  ggplot(aes(x=reprojection_error_px)) +
+  geom_histogram(fill = "#56B4E9", color = "#FFFFFF", binwidth = 0.05) +
+  labs(x = "Reprojection error (px)", y = "Frequency") +
+  theme_classic(base_size = 40)
+
+mean(model_error$reprojection_error_px, na.rm=TRUE)
+
+ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/e3_reprojection_error.png", plot = e3, width = 10, height = 10)
+
+
+#MVT_ERROR MANIP
+setwd("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/data/error/mvt_error")
+csv_files <- list.files(pattern = "\\.csv$")
+
+mvt_data <- lapply(csv_files, read_and_clean) %>% bind_rows()
+
+mvt_data$trial_ID <- as.factor(as.numeric(as.factor(mvt_data$source_file)))
+
+#ERROR FIG 4: CAMERA RECONSTRUCTION ERROR ABSOLUTE MEDIAN PER TRACK
+mvt_data$source_file <- as.factor(mvt_data$source_file)
+mvt_data$reconstruction_error <- abs(as.numeric(mvt_data$reconstruction_error))
+
+e4 <- mvt_data %>%
+  group_by(source_file) %>%
+  summarise(abs_med_recons_err = median(reconstruction_error)) %>%
+  ggplot(aes(x=abs_med_recons_err)) +
+  geom_histogram(fill = "#56B4E9", color = "#FFFFFF", binwidth = 0.001) +
+  labs(x = "Absolute median reconstruction error (m)", y = "Frequency") +
+  theme_classic(base_size = 40)
+
+ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/e4_med_track_reconstruction_error.png", plot = e4, width = 10, height = 10)
+
+#ERROR FIG 5: CAMERA RECONSTRUCTION ERROR RMSE PER TRACK
+e5 <- mvt_data %>%
+  group_by(source_file) %>%
+  summarise(rmse_recons_err = sqrt(mean(reconstruction_error^2))) %>%
+  ggplot(aes(x=rmse_recons_err)) +
+  geom_histogram(fill = "#56B4E9", color = "#FFFFFF", binwidth = 0.002) +
+  scale_x_continuous(
+    limits = c(0, 0.02),
+    expand = c(0, 0)
+  ) +
+  labs(x = "RMSE reconstruction error (m)", y = "Frequency") +
+  theme_classic(base_size = 40)
+
+ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/e5_rmse_track_reconstruction_error.png", plot = e5, width = 10, height = 10)
+
+#ERROR FIG 6: CAMERA RECONSTRUCTION ERROR ABSOLUTE PER FRAME
+e6 <- mvt_data %>%
+  ggplot(aes(fct_reorder(trial_ID,reconstruction_error), reconstruction_error)) +
+  geom_boxplot(fill = "#56B4E9", size = 1) +
+  labs(y = "Absolute reconstruction error (m)", x = "Trial") +
+  theme_classic(base_size = 30)+
+  theme(axis.text.x=element_blank())
+
+ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/e6_med_perpos_reconstruction_error.png", plot = e6, width = 10, height = 10)
+
+#ERROR FIG 7: REPROJECTION ERROR PER TRACK TRACK - estimate the precision of the acquired trajectories.
+mvt_data$reprojection_error <- as.numeric(mvt_data$reprojection_error)
+
+e7 <- mvt_data %>%
+  group_by(source_file) %>%
+  summarise(abs_med_reproj_err = median(reprojection_error)) %>%
+  ggplot(aes(x=abs_med_reproj_err)) +
+  geom_histogram(fill = "#56B4E9", color = "#FFFFFF", binwidth = 1) +
+  labs(x = "Median reprojection error (px)", y = "Frequency") +
+  theme_classic(base_size = 40)
+
+ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/e6_med_perpos_reconstruction_error.png", plot = e7, width = 10, height = 10)
+
+
+#RMSE REPROJECTION ERROR 
+#ERROR FIG 8: REPROJECTION ERROR PER FRAME
+e8 <- mvt_data %>%
+  ggplot(aes(fct_reorder(trial_ID,reprojection_error), reprojection_error)) +
+  geom_boxplot(fill = "#56B4E9", size = 1) +
+  labs(y = "Reprojection error (px)", x = "Trial") +
+  theme_classic(base_size = 30)+
+  theme(axis.text.x=element_blank())
+
+ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/e6_med_perpos_reproj_error.png", plot = e8, width = 10, height = 10)
+
+#Sites
+model_error$site <- as.factor(model_error$site)
+
+e9 <- model_error %>%
+  ggplot(aes(x = site)) +
+  geom_bar(fill = "#56B4E9") +
+  labs(y = "Count", x = "Site") +
+  theme_classic(base_size = 30)+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/e9_site_barplot.png", plot = e9, width = 10, height = 10)
+
+model_error %>%
+  group_by(site) %>%
+  summarise(n = n())
+
+##FIG 9: Chunk time
+chunk_times <- read.csv("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/data/chunk_times/Linearity_2023_follows - chuntime.csv")
+chunk_times %>%
+  ggplot(aes(x = images, y = time)) +
+  geom_point()
+
+chunk_time_data_nl <- glmer(time ~ I(images^2) + (1|trial), data = chunk_times)
+chunk_time_data_lnl <- glmer(time ~ I(images^2) + images + (1|trial), data = chunk_times)
+chunk_time_data_l <- glmer(time ~ images + (1|trial), data = chunk_times)
+AIC(chunk_time_data_nl, chunk_time_data_lnl, chunk_time_data_l)
+summary(chunk_time_data)
+
+newd <- data.frame(images = seq(min(chunk_times$images), max(chunk_times$images)), length.out = 100 )
+newd$predicted <- predict(chunk_time_data_lnl, newdata = newd, re.form=NA, type="response")
+ggplot(chunk_times, aes(x = images, y = time)) +
+  geom_point() +
+  geom_line(data = newd, aes(x = images, y = predicted))

@@ -1,0 +1,26 @@
+{
+    "id": "17486C51",
+    "path": "~/Desktop/PhD/academic_projects/3d_reconstruction/scripts/BORIS_HRI_analysis.R",
+    "project_path": "BORIS_HRI_analysis.R",
+    "type": "r_source",
+    "hash": "0",
+    "contents": "",
+    "dirty": true,
+    "created": 1790601714545.0,
+    "source_on_save": false,
+    "relative_order": 1,
+    "properties": {
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "1157,0",
+        "scrollLine": "1155"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1790207965,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1790700488882,
+    "read_only": false,
+    "read_only_alternatives": []
+}

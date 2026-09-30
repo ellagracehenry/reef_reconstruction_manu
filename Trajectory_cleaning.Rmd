@@ -1,0 +1,431 @@
+---
+title: "Trajectory Cleaning"
+author: "Joshua Manning"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+##Load Packages##
+
+Load packages
+Not all are used. Some are remnants of prior coding and more packages may be added later.
+
+```{r}
+#Reading in, handling, cleaning data.
+
+library(tidyr) #data handling
+library(plyr)
+library(dplyr) #data wrangling
+library(tibble)
+library(lubridate)
+library(purrr)
+
+# Load packages to use data tables and other functions to improve efficiency later in code
+
+library(data.table)
+library(fuzzyjoin)
+library(dplyr)
+library(stringr)
+
+# library(adehabitatLT)
+
+#Statistical analyses
+
+library(car)
+
+#Plotting and mapping
+
+library(ggplot2) # tidyverse vis package
+library(ggpubr) # for ggarrange() etc.
+library(gridExtra) # has a function for comparing ggplot plots side by side.
+library(wesanderson) # best color patterns
+
+#Dealing with conflicts
+
+library(conflicted)
+```
+
+Resolve conflicts
+
+```{r}
+conflict_prefer("rename", "dplyr")
+conflict_prefer("group_by", "dplyr")
+conflict_prefer("filter", "dplyr")
+conflict_prefer("summarise", "dplyr")
+conflict_prefer("select", "dplyr")
+conflict_prefer("mutate", "dplyr")
+conflict_prefer("count", "dplyr")
+conflict_prefer("arrange", "dplyr")
+conflict_prefer("lag", "dplyr")
+conflict_prefer("contr.sum", "stats")
+conflict_prefer("first", "dplyr")
+conflict_prefer("last", "dplyr")
+# conflict_prefer("id", "adehabitatLT")
+```
+
+
+## Read in all CSV files - Initial
+
+```{r}
+files <- dir(path = "/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/data/model_and_traj", pattern = "\\.csv", full.names = T)
+out <- lapply(files, function(x) read.csv(x))
+names(out) <- basename(files)
+
+full <- lapply(out, function(x) bind_rows(x, .id = "column_label"))
+
+full.df <- bind_rows(full, .id="column_label") %>%
+  rename(Observation = column_label) %>%
+  select(-c(R:B)) %>%
+  separate(Observation, c("Observer", "ID", "time", "fps", "opt", "3d", "output", "csv"), sep = "_") %>%
+  select(-c(time, time, opt:csv)) %>%
+  unite("Subject", c(Observer, ID, fps), sep = "_") %>%
+  rename(x = X,
+         y = Y,
+         z = Z) %>%
+  mutate(Subject = as.factor(Subject),
+         frame = as.numeric(frame),
+         fps = ifelse(grepl("3fps", Subject), 3, 1),
+         time_sec = (frame - 1)*(1/fps))
+```
+
+
+
+cleaning 3D tracks
+
+# first load all raw data and compute speeds and turning angles to filter with, then plot raw data
+
+```{r}
+library(zoo)
+
+df.traj <- full.df %>%
+  # ensure time ordering
+  arrange(Subject, frame) %>%
+  group_by(Subject) %>%
+  # compute 3D step vectors and step length
+  mutate(dx = c(NA, diff(x)),
+         dy = c(NA, diff(y)),
+         dz = c(NA, diff(z)),
+         dt = c(NA, diff(time_sec)),
+         step_length = sqrt(dx^2 + dy^2 + dz^2),
+         speed = step_length / dt) %>%
+  mutate(speed_in  = speed,
+         speed_out = lead(speed)) %>%
+  mutate(# vectors defined
+         vx1 = dx,
+         vy1 = dy,
+         vz1 = dz,
+         
+         vx2 = dplyr::lead(dx),
+         vy2 = dplyr::lead(dy),
+         vz2 = dplyr::lead(dz),
+         # dot product
+         dot = vx1 * vx2 + vy1 * vy2 + vz1 * vz2,
+         # magnitudes
+         mag1 = sqrt(vx1^2 + vy1^2 + vz1^2),
+         mag2 = sqrt(vx2^2 + vy2^2 + vz2^2),
+         # angle (radians)
+         theta = acos(dot / (mag1 * mag2))) %>%
+  ungroup()
+
+
+# plot raw data using plotly
+
+library(plotly)
+conflicts_prefer(plotly::layout)
+
+# first define ranges of x, y, and z for all trials to plot everything in same space.
+xlim <- range(c(df.traj$x, df.traj$x), na.rm = TRUE)
+ylim <- range(c(df.traj$y, df.traj$y), na.rm = TRUE)
+zlim <- range(c(df.traj$z, df.traj$z), na.rm = TRUE)
+
+
+# define a palette that works for all trials
+library(wesanderson)
+n <- length(unique(df.traj$Subject))
+pal <- as.character(wes_palette("Zissou1", n = n, type = "continuous"))
+
+fig <- plot_ly(data = df.traj, x = ~x, y = ~y, z = ~z, 
+               type = 'scatter3d', mode = 'markers+lines', 
+               color = ~Subject,
+               colors = pal,
+               marker = list(size = 2),
+               line = list(width = 1)) %>%
+  layout(scene = list(xaxis = list(range = xlim),
+                      yaxis = list(range = ylim), 
+                      zaxis = list(range = zlim)))
+fig
+```
+
+
+
+# Now identify outliers (spikes) in the movement trajectory and plot them
+
+```{r}
+# library(caTools)
+df.clean <- df.traj %>%
+  arrange(Subject, frame) %>%
+  group_by(Subject) %>%
+  # first define the thresholds (s = speed, a = turning angle) for filtering outlier movement
+  mutate(s = as.numeric(quantile(speed, 0.9, na.rm = TRUE)),
+         a = as.numeric(quantile(theta, 0.9, na.rm = TRUE))) %>%
+  mutate(spike_raw = if_else(is.na(speed_in) | is.na(speed_out) | is.na(theta), FALSE,
+                             speed_in > s & speed_out > s & theta > a),
+         high_speed = if_else(is.na(speed), FALSE, speed > s)) %>%
+  mutate(run_id = cumsum(high_speed != lag(high_speed, default = FALSE))) %>%
+  group_by(Subject, run_id) %>%
+  mutate(spike_run = any(spike_raw) & high_speed | high_speed) %>%
+  ungroup()
+
+
+# plot the new trajectories with the outliers removed, but also show where those outliers were
+
+fig.clean <- plot_ly()
+
+subjects <- unique(df.clean$Subject)
+
+for (s in subjects) {
+  
+  # Good
+  fig.clean <- fig.clean %>%
+    add_trace(
+      data = df.clean[df.clean$Subject == s & df.clean$spike_run == FALSE, ],
+      x = ~x, y = ~y, z = ~z,
+      type = 'scatter3d',
+      mode = 'markers+lines',
+      marker = list(size = 2, symbol = 'circle'),
+      line = list(width = 1),
+      name = s,
+      legendgroup = s,
+      showlegend = TRUE
+    )
+  
+  # Bad
+  fig.clean <- fig.clean %>%
+    add_trace(
+      data = df.clean[df.clean$Subject == s & df.clean$spike_run == TRUE, ],
+      x = ~x, y = ~y, z = ~z,
+      type = 'scatter3d',
+      mode = 'markers',
+      marker = list(size = 2, symbol = 'x'),
+      name = s,
+      legendgroup = s,
+      showlegend = TRUE
+    )
+}
+
+fig.clean <- fig.clean %>%
+  layout(scene = list(
+    xaxis = list(range = xlim),
+    yaxis = list(range = ylim),
+    zaxis = list(range = zlim)
+  ))
+
+fig.clean
+```
+
+
+# now remove the outliers and interpolate over those locations instead
+
+NOW I NEED TO REMOVE THE LAST POINT IF THEY ARE HIGH SPEED OR SPIKE RUNS BECAUSE THEY CAN'T BE INTERPOLATED
+
+```{r}
+df.interp <- df.clean %>% 
+  mutate(spike_run = coalesce(spike_run, FALSE),
+         across(c(x, y, z), ~ ifelse(spike_run, NA_real_, .))) %>%
+  # remove old step_lengths and speeds and flag
+  select(Subject:time_sec) %>%
+  arrange(Subject, frame) %>%
+  group_by(Subject) %>%
+  # interpolate missing coordinates
+  mutate(x = na.approx(x, na.rm = FALSE, rule = 1),
+         y = na.approx(y, na.rm = FALSE, rule = 1),
+         z = na.approx(z, na.rm = FALSE, rule = 1)) %>%
+  # recalculate step_length and speed
+  mutate(dx = c(NA, diff(x)),
+         dy = c(NA, diff(y)),
+         dz = c(NA, diff(z)),
+         dt = c(NA, diff(time_sec)),
+         step_length = sqrt(dx^2 + dy^2 + dz^2),
+         speed = step_length / dt) %>%
+  ungroup()
+
+
+
+df.smooth <- df.interp %>%
+  group_by(Subject) %>%
+  arrange(time_sec) %>%
+  mutate(x_med = rollmedian(x, k = 5, fill = NA, align = "center"),
+         y_med = rollmedian(y, k = 5, fill = NA, align = "center"),
+         z_med = rollmedian(z, k = 5, fill = NA, align = "center")) %>%
+  ungroup()
+
+
+
+fig.smooth <- plot_ly(data = df.smooth, x = ~x, y = ~y, z = ~z, 
+               type = 'scatter3d', mode = 'markers+lines', 
+               color = ~Subject,
+               colors = pal,
+               marker = list(size = 2),
+               line = list(width = 1)) %>%
+  layout(scene = list(xaxis = list(range = xlim),
+                      yaxis = list(range = ylim), 
+                      zaxis = list(range = zlim)))
+fig.smooth
+
+
+
+# fig.all <- plot_ly() %>%
+#   # original trajectory
+#   add_trace(data = df.traj, x = ~x, y = ~y, z = ~z, 
+#                type = 'scatter3d', mode = 'markers+lines', 
+#                color = ~Subject,
+#                colors = "red",
+#                marker = list(size = 1),
+#                line = list(width = 0.5),
+#             name = 'Original') %>%
+#   # # cleaned trajectory
+#   # add_trace(data = df.interp, x = ~x, y = ~y, z = ~z, 
+#   #              type = 'scatter3d', mode = 'markers+lines', 
+#   #              color = ~Subject,
+#   #              colors = pal,
+#   #              marker = list(size = 2),
+#   #              line = list(width = 1),
+#   #           name = 'Cleaned') %>%
+#   # smoothed trajectory
+#   add_trace(data = df.smooth, x = ~x, y = ~y, z = ~z, 
+#                type = 'scatter3d', mode = 'markers+lines', 
+#                color = ~Subject,
+#                colors = "blue",
+#                marker = list(size = 2),
+#                line = list(width = 1),
+#             name = 'Smoothed') %>%
+#   layout(scene = list(
+#     xaxis = list(range = xlim, title = "X"),
+#     yaxis = list(range = ylim, title = "Y"),
+#     zaxis = list(range = c(0, max(df.traj$z)), title = "Z")),
+#   legend = list(x = 0.8, y = 0.9))
+
+fig.all <- plot_ly() %>%
+  add_trace(
+    data = df.traj,
+    x = ~x, y = ~y, z = ~z,
+    type = "scatter3d",
+    mode = "markers+lines",
+    marker = list(size = 2, color = "red"),
+    line = list(width = 1, color = "red"),
+    name = "Original"
+  ) %>%
+  add_trace(
+    data = df.smooth,
+    x = ~x, y = ~y, z = ~z,
+    type = "scatter3d",
+    mode = "markers+lines",
+    marker = list(size = 2, color = "blue"),
+    line = list(width = 1, color = "blue"),
+    name = "Smoothed"
+  )
+
+fig.all
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+###OLD CODE###
+
+
+  # # this does part of this
+  # mutate(spike_raw = speed_in > s & speed_out > s & theta > a) %>%
+  # # this extends to include points in the middle of the spike
+  # mutate(spike_expanded =
+  #          spike_raw |
+  #          lag(spike_raw, default = FALSE) |
+  #          lead(spike_raw, default = FALSE))
+
+  # mutate(dx_med = median(dx, na.rm = TRUE),
+  #        dy_med = median(dy, na.rm = TRUE),
+  #        dz_med = median(dz, na.rm = TRUE),
+  #        sp_med = median(speed, na.rm = TRUE),
+  #        
+  #        dx_mad = mad(dx, na.rm = TRUE),
+  #        dy_mad = mad(dy, na.rm = TRUE),
+  #        dz_mad = mad(dz, na.rm = TRUE), 
+  #        sp_mad = mad(speed, na.rm = TRUE),
+  #        
+  #        dx_o = abs(dx - dx_med) > 5 * dx_mad,
+  #        dy_o = abs(dy - dy_med) > 5 * dy_mad,
+  #        dz_o = abs(dz - dz_med) > 5 * dz_mad,
+  #        s_o  = abs(speed - sp_med) > 5 * sp_mad) %>%
+  # mutate(flag = !(dz_o |                                           # catch vertical spikes directly
+  #                   (s_o & (dx_o | dy_o | dz_o)))) %>%  # multi-axis anomaly
+  # ungroup() %>%
+  # filter(!is.na(flag))
+
+# fig.clean <- plot_ly(data = df.clean, x = ~x, y = ~y, z = ~z, 
+#                type = 'scatter3d', mode = 'markers', 
+#                color = ~Subject,
+#                shape = ~flag, shapes = c(4, 16),
+#                marker = list(size = 2),
+#                showlegend = TRUE) %>%
+#   layout(scene = list(xaxis = list(range = xlim),
+#                       yaxis = list(range = ylim), 
+#                       zaxis = list(range = zlim)))
+# fig.clean
+
+# fig.clean <- plot_ly()
+# 
+# # flag == TRUE
+# fig.clean <- fig.clean %>%
+#   add_trace(
+#     data = df.clean[df.clean$flag == TRUE, ],
+#     x = ~x, y = ~y, z = ~z,
+#     type = 'scatter3d',
+#     mode = 'markers',
+#     color = ~Subject,
+#     marker = list(size = 2, symbol = 'circle'),
+#     showlegend = TRUE,
+#     name = 'Flag TRUE'
+#   )
+# 
+# # flag == FALSE
+# fig.clean <- fig.clean %>%
+#   add_trace(
+#     data = df.clean[df.clean$flag == FALSE, ],
+#     x = ~x, y = ~y, z = ~z,
+#     type = 'scatter3d',
+#     mode = 'markers',
+#     color = ~Subject,
+#     marker = list(size = 2, symbol = 'x'),
+#     showlegend = TRUE,
+#     name = 'Flag FALSE'
+#   )
+# 
+# fig.clean <- fig.clean %>%
+#   layout(scene = list(
+#     xaxis = list(range = xlim),
+#     yaxis = list(range = ylim),
+#     zaxis = list(range = zlim)
+#   ))
+# fig.clean

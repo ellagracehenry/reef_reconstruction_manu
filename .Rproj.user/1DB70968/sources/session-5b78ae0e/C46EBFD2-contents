@@ -1,0 +1,24 @@
+nll <- read.csv("/Users/ellag/Downloads/social_threshold_ball_decay_time_social_decay_time_timing_extent_noSocial_15-05-05_NLL.csv", header=FALSE)
+params <- read.csv("/Users/ellag/Downloads/social_threshold_ball_decay_time_social_decay_time_15-05-05.csv")
+
+params <- params[!(params$X %in% c(142,156)),]
+
+nll <- nll[order(nll$V1),,drop=FALSE]
+
+full <- cbind(params,nll)
+
+full <- left_join(params, nll, by = c("X" = "V1"))
+
+plot(full$social_decay_time_coef, full$nll)
+
+#Visualising the three params 
+ggplot(full, aes(y = V2, x = social_threshold))+ geom_point(size = 3)+facet_grid(social_decay_time_coef ~ ball_decay_time_coef, scales = "free_x",space = "free",axis.labels = "all")+labs(x = "Social threshold", y= "Nll")+ ylim(0, 500)
+
+ggplot(full, aes(y = V2, x = social_threshold)) + 
+  geom_point(size = 3)+
+  facet_grid(~ball_decay_time_coef, scales = "free_x",space = "free")+
+  labs(x = "Social threshold", y= "Nll")+ ylim(0, 500)
+
+#ball decay threshold be less than 2
+#social decay threshold should be less than 2 
+#social threshold is between 0 and 10
