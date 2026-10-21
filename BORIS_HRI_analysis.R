@@ -30,7 +30,7 @@ hpdi <- function (samp, prob = 0.95) {
 }
 
 #read in boris df
-boris23_timeline <- read.csv("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/data/BORIS/boris23_timeline_group_size.csv")
+boris23_timeline <- read.csv("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/data/BORIS/BORIS_23_timeline.csv")
 boris23_timeline$ObsName <- paste(boris23_timeline$folder, boris23_timeline$Trial_ID, sep = "_")
 boris23_timeline$ObsID <- boris23_timeline$Trial_ID
 
@@ -99,13 +99,18 @@ hri_data_f$sd <- as.numeric(hri_data_f$sd)
 
 
 full_data <- left_join(boris23_timeline, hri_data_f, by = c("ObsID","frame_n"))
-stripped_data <- full_data[, c("ObsID", "ObsName", "ehc", "ehc_add_sd", "ehc_sd","ehc_constant_cv","ehc_constant_sd","ehc_inverse_cv","ehc_inverse_sd","cv", "sd","sec","frame_n", "frame.y", "activity_state", "habitat_state", "social_state", "observation_date", "subject", "site", "folder_date", "folder_initials", "Bites","Sand.rubbing", "Departure", "Aggressive.on.focal", "Other.behavior", "Change.in.Focal.Fish", "Bite_classification", "modifier_1", "modifier_2", "hit_rate", "min_hit_distance", "max_hit_distance", "avg_distance", "avg_height", "avg_norm_height", "avg_distance_weighted_heights")]
+full_data$bites_binary <- ifelse(full_data$Bites > 0, 1, 0)
+stripped_data <- full_data[, c("ObsID", "ObsName", "ehc", "ehc_add_sd", "ehc_sd","ehc_constant_cv","ehc_constant_sd","ehc_inverse_cv","ehc_inverse_sd","cv", "sd","sec","bites_binary", "frame_n", "frame.y", "activity_state", "habitat_state", "social_state", "observation_date", "subject", "site", "folder_date", "folder_initials", "Bites","Sand.rubbing", "Departure", "Aggressive.on.focal", "Other.behavior", "Change.in.Focal.Fish", "Bite_classification", "hit_rate", "min_hit_distance", "max_hit_distance", "avg_distance", "avg_height", "avg_norm_height", "avg_distance_weighted_heights")]
 stripped_data <- stripped_data %>% filter(activity_state %in% c("Traversing/swimming", "Foraging"))
 stripped_data$activity_state <- as.factor(stripped_data$activity_state)
 
-stripped_data <- stripped_data %>% mutate(modifier_1 = replace_na(modifier_1, "single family"))
-stripped_data <- stripped_data %>% mutate(modifier_2 = replace_na(modifier_2, 0))
-stripped_data$modifier_2 <- stripped_data$modifier_2 + 1
+sum(stripped_data$subject == "surgeonfish")
+
+species_data <- stripped_data %>%
+  group_by(ObsName) %>%
+  summarise(species_id = first(subject))
+
+sum(species_data$species_id == "Surgeonfish")
 
 
 stripped_data %>%
@@ -307,7 +312,7 @@ bout_stats <- full_data %>%
     bout_duration = n(),                             # seconds in bout
     bout_bites = sum(Bites),                         # total bites taken
     bout_bite_rate = bout_bites / bout_duration,               # bites per second
-    bout_hri = mean(ehc_inverse_sd), 
+    bout_hri = mean(ehc), 
     .groups = "drop"
   )
 
@@ -333,96 +338,49 @@ foraging_initiation_data <- stripped_data %>%
   filter(!(activity_state == "Foraging" & foraging_initiation == 0)) %>% #only keep traversing steps and the foraging step they started foraging on
   ungroup()
 
+foraging_initiation_data$ehc_z <- scale(foraging_initiation_data$ehc)
+foraging_initiation_data$sd_z <- scale(foraging_initiation_data$sd)
 foraging_initiation_data$ehc_inverse_sd_z <- scale(foraging_initiation_data$ehc_inverse_sd)
 hist(foraging_initiation_data$ehc_inverse_sd)
-hist(foraging_initiation_data$ehc_inverse_sd_z)
-foraging_initiation_data$modifier_2_z <- scale(foraging_initiation_data$modifier_2)
-foraging_initiation_data$ehc_z <- scale(foraging_initiation_data$ehc)
+hist(foraging_initiation_data$sd_z)
 
 foraging_initiation_data <- foraging_initiation_data |>
-  tidyr::drop_na(foraging_initiation, ehc_inverse_sd_z, social_state, modifier_1)
+  tidyr::drop_na(foraging_initiation, ehc_inverse_sd_z, social_state, sd_z)
 
-table(foraging_initiation_data$modifier_2)
-
-foraging_initiation_data <- foraging_initiation_data %>% mutate(
-  group_size_binned = case_when(
-    modifier_2 == 1 ~ "Solo",
-    modifier_2 %in% c(2,3) ~ "Small",
-    modifier_2 %in% c(4,5) ~ "Medium",
-    modifier_2 %in% c(6,7) ~ "Large"
-  ))
-
-foraging_initiation_data$group_size_binned <- factor(group_size_binned, levels = c("Solo", "Small", "Medium", "Large"))
-
-stripped_data <- stripped_data %>%
-  mutate(
-    group_size_binned = factor(
-      group_size_binned,
-      levels = c("Solo", "Small", "Medium", "Large")
-    )
-  )
-
-foraging_initiation_data <- foraging_initiation_data %>%
-  mutate(
-    group_size_binned = factor(
-      group_size_binned,
-      levels = c("Solo", "Small", "Medium", "Large")
-    ),
-    
-    modifier_1 = factor(
-      modifier_1,
-      levels = c("mixed family", "single family")
-    ),
-    
-    subject = factor(
-      subject,
-      levels = c("Parrotfish", "Surgeonfish")
-    )
-  )
-
-foraging_initiation_data$sd_z <- scale(foraging_initiation_data$sd)
-hist(foraging_initiation_data$sd)
+hist(foraging_initiation_data$ehc_inverse_sd)
 #Prior predictive checks on full model
-activity_mod_6 <- brm(formula = foraging_initiation ~
-                      sd_z +
-                      group_size_binned +
-                      modifier_1 + 
-                     # subject +
-                    #  ehc_z:group_size_binned +
-                    #  ehc_z:modifier_1 +
-                      sd_z:subject + 
-                      sd_z:group_size_binned +
-                   #   group_size_binned:modifier_1 +
-                    #  group_size_binned:subject +
-                    #  modifier_1:subject +
-                      #ehc_z:group_size_binned:modifier_1 +
-                   #   ehc_z:group_size_binned:subject +
-                   #   group_size_binned:subject:modifier_1 +
-                    #  modifier_1:subject:ehc_z +
-                    #  ehc_z:modifier_1:subject +
-                      #ehc_z:subject:group_size_binned:modifier_1 +
-                     # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                      (1|ObsID) +
-                      (1|site) +
-                      (1|folder_date),
-                    data = foraging_initiation_data,
-                    chains = 4,
-                    cores = 4,
-                    iter = 4000,
-                    warmup = 2000,
-                    prior = c(
-                      prior(normal(0, 1), class = "b"),
-                      prior(normal(-2.5, 1.5), class = "Intercept")
-                      #prior(exponential(1), class = "sd")
-                    ),
-                    save_pars = save_pars(all=TRUE),
-                    #sample_prior = 'only',
-                    family = bernoulli(link = "logit"),
-                    control = list(adapt_delta = 0.98)
+activity_mod <- brm(
+  formula = foraging_initiation ~
+    ehc_inverse_sd * modifier_1 * modifier_2_z * subject +
+    (1 | ObsID) +
+    (1 | site) +
+    (1 | folder_date),
+  
+  data = foraging_initiation_data,
+  
+  chains = 4,
+  cores = 4,
+  iter = 4000,
+  warmup = 2000,
+  
+  prior = c(
+    prior(normal(0, 1), class = "b"),
+    prior(normal(-2.5, 1.5), class = "Intercept")
+  ),
+  
+  save_pars = save_pars(all = TRUE),
+  
+  # sample_prior = "only",
+  
+  family = bernoulli(link = "logit"),
+  
+  control = list(
+    adapt_delta = 0.98
+  )
 )
 
-summary(activity_mod_6)
-loo(activity_mod, activity_mod_2, activity_mod_3, activity_mod_4, activity_mod_5, activity_mod_6)
+summary(activity_mod)
+
 
 #PRIOR CHECKS
 prior_pred <- posterior_predict(activity_mod)
@@ -449,1111 +407,6 @@ pp_check(activity_mod, type = "bars")
 pp_check(activity_mod, type="dens_overlay",ndraws=500)
 
 #Nested models
-#Single factor models
-activity_mod_E <- brm(formula = foraging_initiation ~
-                        ehc_z +
-                        # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                        (1|ObsID) +
-                        (1|site) +
-                        (1|folder_date),
-                      data = foraging_initiation_data,
-                      chains = 4,
-                      cores = 4,
-                      iter = 4000,
-                      warmup = 2000,
-                      prior = c(
-                        prior(normal(0, 1), class = "b"),
-                        prior(normal(-2.5, 1.5), class = "Intercept")
-                        #prior(exponential(1), class = "sd")
-                      ),
-                      save_pars = save_pars(all=TRUE),
-                      #sample_prior = 'only',
-                      family = bernoulli(link = "logit"),
-                      control = list(adapt_delta = 0.98)
-)
-
-activity_mod_G <- brm(formula = foraging_initiation ~
-                           group_size_binned +
-                           # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                           (1|ObsID) +
-                           (1|site) +
-                           (1|folder_date),
-                         data = foraging_initiation_data,
-                         chains = 4,
-                         cores = 4,
-                         iter = 4000,
-                         warmup = 2000,
-                         prior = c(
-                           prior(normal(0, 1), class = "b"),
-                           prior(normal(-2.5, 1.5), class = "Intercept")
-                           #prior(exponential(1), class = "sd")
-                         ),
-                         save_pars = save_pars(all=TRUE),
-                         #sample_prior = 'only',
-                         family = bernoulli(link = "logit"),
-                         control = list(adapt_delta = 0.98)
-)
-
-activity_mod_M <- brm(formula = foraging_initiation ~
-                           modifier_1 + 
-                           # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                           (1|ObsID) +
-                           (1|site) +
-                           (1|folder_date),
-                         data = foraging_initiation_data,
-                         chains = 4,
-                         cores = 4,
-                         iter = 4000,
-                         warmup = 2000,
-                         prior = c(
-                           prior(normal(0, 1), class = "b"),
-                           prior(normal(-2.5, 1.5), class = "Intercept")
-                           #prior(exponential(1), class = "sd")
-                         ),
-                         save_pars = save_pars(all=TRUE),
-                         #sample_prior = 'only',
-                         family = bernoulli(link = "logit"),
-                         control = list(adapt_delta = 0.98)
-)
-
-activity_mod_S <- brm(formula = foraging_initiation ~
-                           subject +
-                           # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                           (1|ObsID) +
-                           (1|site) +
-                           (1|folder_date),
-                         data = foraging_initiation_data,
-                         chains = 4,
-                         cores = 4,
-                         iter = 4000,
-                         warmup = 2000,
-                         prior = c(
-                           prior(normal(0, 1), class = "b"),
-                           prior(normal(-2.5, 1.5), class = "Intercept")
-                           #prior(exponential(1), class = "sd")
-                         ),
-                         save_pars = save_pars(all=TRUE),
-                         #sample_prior = 'only',
-                         family = bernoulli(link = "logit"),
-                         control = list(adapt_delta = 0.98)
-)
-
-#Two factor models
-activity_mod_EG <- brm(formula = foraging_initiation ~
-                           ehc_z +
-                           group_size_binned +
-                           # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                           (1|ObsID) +
-                           (1|site) +
-                           (1|folder_date),
-                         data = foraging_initiation_data,
-                         chains = 4,
-                         cores = 4,
-                         iter = 4000,
-                         warmup = 2000,
-                         prior = c(
-                           prior(normal(0, 1), class = "b"),
-                           prior(normal(-2.5, 1.5), class = "Intercept")
-                           #prior(exponential(1), class = "sd")
-                         ),
-                         save_pars = save_pars(all=TRUE),
-                         #sample_prior = 'only',
-                         family = bernoulli(link = "logit"),
-                         control = list(adapt_delta = 0.98)
-)
-
-activity_mod_GM <- brm(formula = foraging_initiation ~
-                           group_size_binned +
-                           modifier_1 + 
-                           # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                           (1|ObsID) +
-                           (1|site) +
-                           (1|folder_date),
-                         data = foraging_initiation_data,
-                         chains = 4,
-                         cores = 4,
-                         iter = 4000,
-                         warmup = 2000,
-                         prior = c(
-                           prior(normal(0, 1), class = "b"),
-                           prior(normal(-2.5, 1.5), class = "Intercept")
-                           #prior(exponential(1), class = "sd")
-                         ),
-                         save_pars = save_pars(all=TRUE),
-                         #sample_prior = 'only',
-                         family = bernoulli(link = "logit"),
-                         control = list(adapt_delta = 0.98)
-)
-
-activity_mod_MS <- brm(formula = foraging_initiation ~
-                         modifier_1 +
-                         subject +
-                         # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                         (1|ObsID) +
-                         (1|site) +
-                         (1|folder_date),
-                       data = foraging_initiation_data,
-                       chains = 4,
-                       cores = 4,
-                       iter = 4000,
-                       warmup = 2000,
-                       prior = c(
-                         prior(normal(0, 1), class = "b"),
-                         prior(normal(-2.5, 1.5), class = "Intercept")
-                         #prior(exponential(1), class = "sd")
-                       ),
-                       save_pars = save_pars(all=TRUE),
-                       #sample_prior = 'only',
-                       family = bernoulli(link = "logit"),
-                       control = list(adapt_delta = 0.98)
-)
-
-activity_mod_SE <- brm(formula = foraging_initiation ~
-                         ehc_z +
-                         subject +
-                         # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                         (1|ObsID) +
-                         (1|site) +
-                         (1|folder_date),
-                       data = foraging_initiation_data,
-                       chains = 4,
-                       cores = 4,
-                       iter = 4000,
-                       warmup = 2000,
-                       prior = c(
-                         prior(normal(0, 1), class = "b"),
-                         prior(normal(-2.5, 1.5), class = "Intercept")
-                         #prior(exponential(1), class = "sd")
-                       ),
-                       save_pars = save_pars(all=TRUE),
-                       #sample_prior = 'only',
-                       family = bernoulli(link = "logit"),
-                       control = list(adapt_delta = 0.98)
-)
-
-activity_mod_SG <- brm(formula = foraging_initiation ~
-                         group_size_binned +
-                         subject +
-                         # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                         (1|ObsID) +
-                         (1|site) +
-                         (1|folder_date),
-                       data = foraging_initiation_data,
-                       chains = 4,
-                       cores = 4,
-                       iter = 4000,
-                       warmup = 2000,
-                       prior = c(
-                         prior(normal(0, 1), class = "b"),
-                         prior(normal(-2.5, 1.5), class = "Intercept")
-                         #prior(exponential(1), class = "sd")
-                       ),
-                       save_pars = save_pars(all=TRUE),
-                       #sample_prior = 'only',
-                       family = bernoulli(link = "logit"),
-                       control = list(adapt_delta = 0.98)
-)
-
-activity_mod_EM <- brm(formula = foraging_initiation ~
-                         ehc_z +
-                         modifier_1 +
-                         # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                         (1|ObsID) +
-                         (1|site) +
-                         (1|folder_date),
-                       data = foraging_initiation_data,
-                       chains = 4,
-                       cores = 4,
-                       iter = 4000,
-                       warmup = 2000,
-                       prior = c(
-                         prior(normal(0, 1), class = "b"),
-                         prior(normal(-2.5, 1.5), class = "Intercept")
-                         #prior(exponential(1), class = "sd")
-                       ),
-                       save_pars = save_pars(all=TRUE),
-                       #sample_prior = 'only',
-                       family = bernoulli(link = "logit"),
-                       control = list(adapt_delta = 0.98)
-)
-
-#Two factor models with interactions
-activity_mod_ExG <- brm(formula = foraging_initiation ~
-                         ehc_z +
-                         group_size_binned +
-                         ehc_z:group_size_binned +
-                         # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                         (1|ObsID) +
-                         (1|site) +
-                         (1|folder_date),
-                       data = foraging_initiation_data,
-                       chains = 4,
-                       cores = 4,
-                       iter = 4000,
-                       warmup = 2000,
-                       prior = c(
-                         prior(normal(0, 1), class = "b"),
-                         prior(normal(-2.5, 1.5), class = "Intercept")
-                         #prior(exponential(1), class = "sd")
-                       ),
-                       save_pars = save_pars(all=TRUE),
-                       #sample_prior = 'only',
-                       family = bernoulli(link = "logit"),
-                       control = list(adapt_delta = 0.98)
-)
-
-activity_mod_GxM <- brm(formula = foraging_initiation ~
-                         group_size_binned +
-                         modifier_1 + 
-                         group_size_binned:modifier_1 +
-                         # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                         (1|ObsID) +
-                         (1|site) +
-                         (1|folder_date),
-                       data = foraging_initiation_data,
-                       chains = 4,
-                       cores = 4,
-                       iter = 4000,
-                       warmup = 2000,
-                       prior = c(
-                         prior(normal(0, 1), class = "b"),
-                         prior(normal(-2.5, 1.5), class = "Intercept")
-                         #prior(exponential(1), class = "sd")
-                       ),
-                       save_pars = save_pars(all=TRUE),
-                       #sample_prior = 'only',
-                       family = bernoulli(link = "logit"),
-                       control = list(adapt_delta = 0.98)
-)
-
-activity_mod_MxS <- brm(formula = foraging_initiation ~
-                         modifier_1 +
-                         subject +
-                         modifier_1:subject + 
-                         # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                         (1|ObsID) +
-                         (1|site) +
-                         (1|folder_date),
-                       data = foraging_initiation_data,
-                       chains = 4,
-                       cores = 4,
-                       iter = 4000,
-                       warmup = 2000,
-                       prior = c(
-                         prior(normal(0, 1), class = "b"),
-                         prior(normal(-2.5, 1.5), class = "Intercept")
-                         #prior(exponential(1), class = "sd")
-                       ),
-                       save_pars = save_pars(all=TRUE),
-                       #sample_prior = 'only',
-                       family = bernoulli(link = "logit"),
-                       control = list(adapt_delta = 0.98)
-)
-
-activity_mod_SxE <- brm(formula = foraging_initiation ~
-                         ehc_z +
-                         subject +
-                         ehc_z:subject +
-                         # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                         (1|ObsID) +
-                         (1|site) +
-                         (1|folder_date),
-                       data = foraging_initiation_data,
-                       chains = 4,
-                       cores = 4,
-                       iter = 4000,
-                       warmup = 2000,
-                       prior = c(
-                         prior(normal(0, 1), class = "b"),
-                         prior(normal(-2.5, 1.5), class = "Intercept")
-                         #prior(exponential(1), class = "sd")
-                       ),
-                       save_pars = save_pars(all=TRUE),
-                       #sample_prior = 'only',
-                       family = bernoulli(link = "logit"),
-                       control = list(adapt_delta = 0.98)
-)
-
-activity_mod_SxG <- brm(formula = foraging_initiation ~
-                         group_size_binned +
-                         subject +
-                         group_size_binned:subject +
-                         # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                         (1|ObsID) +
-                         (1|site) +
-                         (1|folder_date),
-                       data = foraging_initiation_data,
-                       chains = 4,
-                       cores = 4,
-                       iter = 4000,
-                       warmup = 2000,
-                       prior = c(
-                         prior(normal(0, 1), class = "b"),
-                         prior(normal(-2.5, 1.5), class = "Intercept")
-                         #prior(exponential(1), class = "sd")
-                       ),
-                       save_pars = save_pars(all=TRUE),
-                       #sample_prior = 'only',
-                       family = bernoulli(link = "logit"),
-                       control = list(adapt_delta = 0.98)
-)
-
-activity_mod_ExM <- brm(formula = foraging_initiation ~
-                         ehc_z +
-                         modifier_1 +
-                         ehc_z:modifier_1 +
-                         # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                         (1|ObsID) +
-                         (1|site) +
-                         (1|folder_date),
-                       data = foraging_initiation_data,
-                       chains = 4,
-                       cores = 4,
-                       iter = 4000,
-                       warmup = 2000,
-                       prior = c(
-                         prior(normal(0, 1), class = "b"),
-                         prior(normal(-2.5, 1.5), class = "Intercept")
-                         #prior(exponential(1), class = "sd")
-                       ),
-                       save_pars = save_pars(all=TRUE),
-                       #sample_prior = 'only',
-                       family = bernoulli(link = "logit"),
-                       control = list(adapt_delta = 0.98)
-)
-
-################################
-
-#Three factor models
-activity_mod_EMG <- brm(formula = foraging_initiation ~
-                         ehc_z +
-                         modifier_1 +
-                         group_size_binned +
-                         # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                         (1|ObsID) +
-                         (1|site) +
-                         (1|folder_date),
-                       data = foraging_initiation_data,
-                       chains = 4,
-                       cores = 4,
-                       iter = 4000,
-                       warmup = 2000,
-                       prior = c(
-                         prior(normal(0, 1), class = "b"),
-                         prior(normal(-2.5, 1.5), class = "Intercept")
-                         #prior(exponential(1), class = "sd")
-                       ),
-                       save_pars = save_pars(all=TRUE),
-                       #sample_prior = 'only',
-                       family = bernoulli(link = "logit"),
-                       control = list(adapt_delta = 0.98)
-)
-
-activity_mod_EMS <- brm(formula = foraging_initiation ~
-                          ehc_z +
-                          modifier_1 +
-                          group_size_binned +
-                          # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                          (1|ObsID) +
-                          (1|site) +
-                          (1|folder_date),
-                        data = foraging_initiation_data,
-                        chains = 4,
-                        cores = 4,
-                        iter = 4000,
-                        warmup = 2000,
-                        prior = c(
-                          prior(normal(0, 1), class = "b"),
-                          prior(normal(-2.5, 1.5), class = "Intercept")
-                          #prior(exponential(1), class = "sd")
-                        ),
-                        save_pars = save_pars(all=TRUE),
-                        #sample_prior = 'only',
-                        family = bernoulli(link = "logit"),
-                        control = list(adapt_delta = 0.98)
-)
-
-activity_mod_EGS <- brm(formula = foraging_initiation ~
-                          ehc_z +
-                          group_size_binned +
-                          subject +
-                          # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                          (1|ObsID) +
-                          (1|site) +
-                          (1|folder_date),
-                        data = foraging_initiation_data,
-                        chains = 4,
-                        cores = 4,
-                        iter = 4000,
-                        warmup = 2000,
-                        prior = c(
-                          prior(normal(0, 1), class = "b"),
-                          prior(normal(-2.5, 1.5), class = "Intercept")
-                          #prior(exponential(1), class = "sd")
-                        ),
-                        save_pars = save_pars(all=TRUE),
-                        #sample_prior = 'only',
-                        family = bernoulli(link = "logit"),
-                        control = list(adapt_delta = 0.98)
-)
-
-activity_mod_MSG <- brm(formula = foraging_initiation ~
-                          group_size_binned +
-                          subject +
-                          modifier_1 + 
-                          # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                          (1|ObsID) +
-                          (1|site) +
-                          (1|folder_date),
-                        data = foraging_initiation_data,
-                        chains = 4,
-                        cores = 4,
-                        iter = 4000,
-                        warmup = 2000,
-                        prior = c(
-                          prior(normal(0, 1), class = "b"),
-                          prior(normal(-2.5, 1.5), class = "Intercept")
-                          #prior(exponential(1), class = "sd")
-                        ),
-                        save_pars = save_pars(all=TRUE),
-                        #sample_prior = 'only',
-                        family = bernoulli(link = "logit"),
-                        control = list(adapt_delta = 0.98)
-)
-
-#Three factor models with single two-way interactions
-activity_mod_EMG_ExM <- brm(formula = foraging_initiation ~
-                          ehc_z +
-                          modifier_1 +
-                          group_size_binned +
-                          ehc_z:modifier_1 +
-                          # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                          (1|ObsID) +
-                          (1|site) +
-                          (1|folder_date),
-                        data = foraging_initiation_data,
-                        chains = 4,
-                        cores = 4,
-                        iter = 4000,
-                        warmup = 2000,
-                        prior = c(
-                          prior(normal(0, 1), class = "b"),
-                          prior(normal(-2.5, 1.5), class = "Intercept")
-                          #prior(exponential(1), class = "sd")
-                        ),
-                        save_pars = save_pars(all=TRUE),
-                        #sample_prior = 'only',
-                        family = bernoulli(link = "logit"),
-                        control = list(adapt_delta = 0.98)
-)
-
-activity_mod_EMG_GxM <- brm(formula = foraging_initiation ~
-                              ehc_z +
-                              modifier_1 +
-                              group_size_binned +
-                              group_size_binned:modifier_1 +
-                              # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                              (1|ObsID) +
-                              (1|site) +
-                              (1|folder_date),
-                            data = foraging_initiation_data,
-                            chains = 4,
-                            cores = 4,
-                            iter = 4000,
-                            warmup = 2000,
-                            prior = c(
-                              prior(normal(0, 1), class = "b"),
-                              prior(normal(-2.5, 1.5), class = "Intercept")
-                              #prior(exponential(1), class = "sd")
-                            ),
-                            save_pars = save_pars(all=TRUE),
-                            #sample_prior = 'only',
-                            family = bernoulli(link = "logit"),
-                            control = list(adapt_delta = 0.98)
-)
-
-activity_mod_EMG_ExG <- brm(formula = foraging_initiation ~
-                              ehc_z +
-                              modifier_1 +
-                              group_size_binned +
-                              ehc_z:group_size_binned +
-                              # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                              (1|ObsID) +
-                              (1|site) +
-                              (1|folder_date),
-                            data = foraging_initiation_data,
-                            chains = 4,
-                            cores = 4,
-                            iter = 4000,
-                            warmup = 2000,
-                            prior = c(
-                              prior(normal(0, 1), class = "b"),
-                              prior(normal(-2.5, 1.5), class = "Intercept")
-                              #prior(exponential(1), class = "sd")
-                            ),
-                            save_pars = save_pars(all=TRUE),
-                            #sample_prior = 'only',
-                            family = bernoulli(link = "logit"),
-                            control = list(adapt_delta = 0.98)
-)
-
-
-activity_mod_EMS_ExM <- brm(formula = foraging_initiation ~
-                          ehc_z +
-                          modifier_1 +
-                          group_size_binned +
-                          ehc_z:modifier_1 +
-                          # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                          (1|ObsID) +
-                          (1|site) +
-                          (1|folder_date),
-                        data = foraging_initiation_data,
-                        chains = 4,
-                        cores = 4,
-                        iter = 4000,
-                        warmup = 2000,
-                        prior = c(
-                          prior(normal(0, 1), class = "b"),
-                          prior(normal(-2.5, 1.5), class = "Intercept")
-                          #prior(exponential(1), class = "sd")
-                        ),
-                        save_pars = save_pars(all=TRUE),
-                        #sample_prior = 'only',
-                        family = bernoulli(link = "logit"),
-                        control = list(adapt_delta = 0.98)
-)
-
-activity_mod_EMS_ExG <- brm(formula = foraging_initiation ~
-                              ehc_z +
-                              modifier_1 +
-                              group_size_binned +
-                              ehc_z:group_size_binned +
-                              # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                              (1|ObsID) +
-                              (1|site) +
-                              (1|folder_date),
-                            data = foraging_initiation_data,
-                            chains = 4,
-                            cores = 4,
-                            iter = 4000,
-                            warmup = 2000,
-                            prior = c(
-                              prior(normal(0, 1), class = "b"),
-                              prior(normal(-2.5, 1.5), class = "Intercept")
-                              #prior(exponential(1), class = "sd")
-                            ),
-                            save_pars = save_pars(all=TRUE),
-                            #sample_prior = 'only',
-                            family = bernoulli(link = "logit"),
-                            control = list(adapt_delta = 0.98)
-)
-
-activity_mod_EMS_ExM <- brm(formula = foraging_initiation ~
-                              ehc_z +
-                              modifier_1 +
-                              group_size_binned +
-                              group_size_binned:modifier_1 +
-                              # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                              (1|ObsID) +
-                              (1|site) +
-                              (1|folder_date),
-                            data = foraging_initiation_data,
-                            chains = 4,
-                            cores = 4,
-                            iter = 4000,
-                            warmup = 2000,
-                            prior = c(
-                              prior(normal(0, 1), class = "b"),
-                              prior(normal(-2.5, 1.5), class = "Intercept")
-                              #prior(exponential(1), class = "sd")
-                            ),
-                            save_pars = save_pars(all=TRUE),
-                            #sample_prior = 'only',
-                            family = bernoulli(link = "logit"),
-                            control = list(adapt_delta = 0.98)
-)
-
-
-activity_mod_EGS_ExG <- brm(formula = foraging_initiation ~
-                          ehc_z +
-                          group_size_binned +
-                          subject +
-                          ehc_z:group_size_binned + 
-                          # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                          (1|ObsID) +
-                          (1|site) +
-                          (1|folder_date),
-                        data = foraging_initiation_data,
-                        chains = 4,
-                        cores = 4,
-                        iter = 4000,
-                        warmup = 2000,
-                        prior = c(
-                          prior(normal(0, 1), class = "b"),
-                          prior(normal(-2.5, 1.5), class = "Intercept")
-                          #prior(exponential(1), class = "sd")
-                        ),
-                        save_pars = save_pars(all=TRUE),
-                        #sample_prior = 'only',
-                        family = bernoulli(link = "logit"),
-                        control = list(adapt_delta = 0.98)
-)
-
-activity_mod_EGS_ExS <- brm(formula = foraging_initiation ~
-                          ehc_z +
-                          group_size_binned +
-                          subject +
-                          ehc_z:subject + 
-                          # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                          (1|ObsID) +
-                          (1|site) +
-                          (1|folder_date),
-                        data = foraging_initiation_data,
-                        chains = 4,
-                        cores = 4,
-                        iter = 4000,
-                        warmup = 2000,
-                        prior = c(
-                          prior(normal(0, 1), class = "b"),
-                          prior(normal(-2.5, 1.5), class = "Intercept")
-                          #prior(exponential(1), class = "sd")
-                        ),
-                        save_pars = save_pars(all=TRUE),
-                        #sample_prior = 'only',
-                        family = bernoulli(link = "logit"),
-                        control = list(adapt_delta = 0.98)
-)
-
-activity_mod_EGS_GxS <- brm(formula = foraging_initiation ~
-                              ehc_z +
-                              group_size_binned +
-                              subject +
-                              group_size_binned:subject + 
-                              # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                              (1|ObsID) +
-                              (1|site) +
-                              (1|folder_date),
-                            data = foraging_initiation_data,
-                            chains = 4,
-                            cores = 4,
-                            iter = 4000,
-                            warmup = 2000,
-                            prior = c(
-                              prior(normal(0, 1), class = "b"),
-                              prior(normal(-2.5, 1.5), class = "Intercept")
-                              #prior(exponential(1), class = "sd")
-                            ),
-                            save_pars = save_pars(all=TRUE),
-                            #sample_prior = 'only',
-                            family = bernoulli(link = "logit"),
-                            control = list(adapt_delta = 0.98)
-)
-
-activity_mod_MSG_GxS <- brm(formula = foraging_initiation ~
-                          group_size_binned +
-                          subject +
-                          modifier_1 + 
-                          group_size_binned:subject + 
-                          # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                          (1|ObsID) +
-                          (1|site) +
-                          (1|folder_date),
-                        data = foraging_initiation_data,
-                        chains = 4,
-                        cores = 4,
-                        iter = 4000,
-                        warmup = 2000,
-                        prior = c(
-                          prior(normal(0, 1), class = "b"),
-                          prior(normal(-2.5, 1.5), class = "Intercept")
-                          #prior(exponential(1), class = "sd")
-                        ),
-                        save_pars = save_pars(all=TRUE),
-                        #sample_prior = 'only',
-                        family = bernoulli(link = "logit"),
-                        control = list(adapt_delta = 0.98)
-)
-
-activity_mod_MSG_MxS <- brm(formula = foraging_initiation ~
-                              group_size_binned +
-                              subject +
-                              modifier_1 + 
-                              modifier_1:subject + 
-                              # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                              (1|ObsID) +
-                              (1|site) +
-                              (1|folder_date),
-                            data = foraging_initiation_data,
-                            chains = 4,
-                            cores = 4,
-                            iter = 4000,
-                            warmup = 2000,
-                            prior = c(
-                              prior(normal(0, 1), class = "b"),
-                              prior(normal(-2.5, 1.5), class = "Intercept")
-                              #prior(exponential(1), class = "sd")
-                            ),
-                            save_pars = save_pars(all=TRUE),
-                            #sample_prior = 'only',
-                            family = bernoulli(link = "logit"),
-                            control = list(adapt_delta = 0.98)
-)
-
-activity_mod_MSG_GxM <- brm(formula = foraging_initiation ~
-                              group_size_binned +
-                              subject +
-                              modifier_1 + 
-                              group_size_binned:modifier_1 + 
-                              # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                              (1|ObsID) +
-                              (1|site) +
-                              (1|folder_date),
-                            data = foraging_initiation_data,
-                            chains = 4,
-                            cores = 4,
-                            iter = 4000,
-                            warmup = 2000,
-                            prior = c(
-                              prior(normal(0, 1), class = "b"),
-                              prior(normal(-2.5, 1.5), class = "Intercept")
-                              #prior(exponential(1), class = "sd")
-                            ),
-                            save_pars = save_pars(all=TRUE),
-                            #sample_prior = 'only',
-                            family = bernoulli(link = "logit"),
-                            control = list(adapt_delta = 0.98)
-)
-
-###########
-
-#Three factor model with multiple two way interactions
-activity_mod_EMG_ExM <- brm(formula = foraging_initiation ~
-                              ehc_z +
-                              modifier_1 +
-                              group_size_binned +
-                              ehc_z:modifier_1 +
-                              # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                              (1|ObsID) +
-                              (1|site) +
-                              (1|folder_date),
-                            data = foraging_initiation_data,
-                            chains = 4,
-                            cores = 4,
-                            iter = 4000,
-                            warmup = 2000,
-                            prior = c(
-                              prior(normal(0, 1), class = "b"),
-                              prior(normal(-2.5, 1.5), class = "Intercept")
-                              #prior(exponential(1), class = "sd")
-                            ),
-                            save_pars = save_pars(all=TRUE),
-                            #sample_prior = 'only',
-                            family = bernoulli(link = "logit"),
-                            control = list(adapt_delta = 0.98)
-)
-
-activity_mod_EMG_ExM <- brm(formula = foraging_initiation ~
-                              ehc_z +
-                              modifier_1 +
-                              group_size_binned +
-                              ehc_z:modifier_1 +
-                              # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                              (1|ObsID) +
-                              (1|site) +
-                              (1|folder_date),
-                            data = foraging_initiation_data,
-                            chains = 4,
-                            cores = 4,
-                            iter = 4000,
-                            warmup = 2000,
-                            prior = c(
-                              prior(normal(0, 1), class = "b"),
-                              prior(normal(-2.5, 1.5), class = "Intercept")
-                              #prior(exponential(1), class = "sd")
-                            ),
-                            save_pars = save_pars(all=TRUE),
-                            #sample_prior = 'only',
-                            family = bernoulli(link = "logit"),
-                            control = list(adapt_delta = 0.98)
-)
-
-activity_mod_EMG_GxM <- brm(formula = foraging_initiation ~
-                              ehc_z +
-                              modifier_1 +
-                              group_size_binned +
-                              group_size_binned:modifier_1 +
-                              # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                              (1|ObsID) +
-                              (1|site) +
-                              (1|folder_date),
-                            data = foraging_initiation_data,
-                            chains = 4,
-                            cores = 4,
-                            iter = 4000,
-                            warmup = 2000,
-                            prior = c(
-                              prior(normal(0, 1), class = "b"),
-                              prior(normal(-2.5, 1.5), class = "Intercept")
-                              #prior(exponential(1), class = "sd")
-                            ),
-                            save_pars = save_pars(all=TRUE),
-                            #sample_prior = 'only',
-                            family = bernoulli(link = "logit"),
-                            control = list(adapt_delta = 0.98)
-)
-
-activity_mod_EMG_ExG <- brm(formula = foraging_initiation ~
-                              ehc_z +
-                              modifier_1 +
-                              group_size_binned +
-                              ehc_z:group_size_binned +
-                              # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                              (1|ObsID) +
-                              (1|site) +
-                              (1|folder_date),
-                            data = foraging_initiation_data,
-                            chains = 4,
-                            cores = 4,
-                            iter = 4000,
-                            warmup = 2000,
-                            prior = c(
-                              prior(normal(0, 1), class = "b"),
-                              prior(normal(-2.5, 1.5), class = "Intercept")
-                              #prior(exponential(1), class = "sd")
-                            ),
-                            save_pars = save_pars(all=TRUE),
-                            #sample_prior = 'only',
-                            family = bernoulli(link = "logit"),
-                            control = list(adapt_delta = 0.98)
-)
-
-
-activity_mod_EMS_ExM <- brm(formula = foraging_initiation ~
-                              ehc_z +
-                              modifier_1 +
-                              group_size_binned +
-                              ehc_z:modifier_1 +
-                              # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                              (1|ObsID) +
-                              (1|site) +
-                              (1|folder_date),
-                            data = foraging_initiation_data,
-                            chains = 4,
-                            cores = 4,
-                            iter = 4000,
-                            warmup = 2000,
-                            prior = c(
-                              prior(normal(0, 1), class = "b"),
-                              prior(normal(-2.5, 1.5), class = "Intercept")
-                              #prior(exponential(1), class = "sd")
-                            ),
-                            save_pars = save_pars(all=TRUE),
-                            #sample_prior = 'only',
-                            family = bernoulli(link = "logit"),
-                            control = list(adapt_delta = 0.98)
-)
-
-activity_mod_EMS_ExG <- brm(formula = foraging_initiation ~
-                              ehc_z +
-                              modifier_1 +
-                              group_size_binned +
-                              ehc_z:group_size_binned +
-                              # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                              (1|ObsID) +
-                              (1|site) +
-                              (1|folder_date),
-                            data = foraging_initiation_data,
-                            chains = 4,
-                            cores = 4,
-                            iter = 4000,
-                            warmup = 2000,
-                            prior = c(
-                              prior(normal(0, 1), class = "b"),
-                              prior(normal(-2.5, 1.5), class = "Intercept")
-                              #prior(exponential(1), class = "sd")
-                            ),
-                            save_pars = save_pars(all=TRUE),
-                            #sample_prior = 'only',
-                            family = bernoulli(link = "logit"),
-                            control = list(adapt_delta = 0.98)
-)
-
-activity_mod_EMS_ExM <- brm(formula = foraging_initiation ~
-                              ehc_z +
-                              modifier_1 +
-                              group_size_binned +
-                              group_size_binned:modifier_1 +
-                              # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                              (1|ObsID) +
-                              (1|site) +
-                              (1|folder_date),
-                            data = foraging_initiation_data,
-                            chains = 4,
-                            cores = 4,
-                            iter = 4000,
-                            warmup = 2000,
-                            prior = c(
-                              prior(normal(0, 1), class = "b"),
-                              prior(normal(-2.5, 1.5), class = "Intercept")
-                              #prior(exponential(1), class = "sd")
-                            ),
-                            save_pars = save_pars(all=TRUE),
-                            #sample_prior = 'only',
-                            family = bernoulli(link = "logit"),
-                            control = list(adapt_delta = 0.98)
-)
-
-
-activity_mod_EGS_ExG <- brm(formula = foraging_initiation ~
-                              ehc_z +
-                              group_size_binned +
-                              subject +
-                              ehc_z:group_size_binned + 
-                              # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                              (1|ObsID) +
-                              (1|site) +
-                              (1|folder_date),
-                            data = foraging_initiation_data,
-                            chains = 4,
-                            cores = 4,
-                            iter = 4000,
-                            warmup = 2000,
-                            prior = c(
-                              prior(normal(0, 1), class = "b"),
-                              prior(normal(-2.5, 1.5), class = "Intercept")
-                              #prior(exponential(1), class = "sd")
-                            ),
-                            save_pars = save_pars(all=TRUE),
-                            #sample_prior = 'only',
-                            family = bernoulli(link = "logit"),
-                            control = list(adapt_delta = 0.98)
-)
-
-activity_mod_EGS_ExS <- brm(formula = foraging_initiation ~
-                              ehc_z +
-                              group_size_binned +
-                              subject +
-                              ehc_z:subject + 
-                              # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                              (1|ObsID) +
-                              (1|site) +
-                              (1|folder_date),
-                            data = foraging_initiation_data,
-                            chains = 4,
-                            cores = 4,
-                            iter = 4000,
-                            warmup = 2000,
-                            prior = c(
-                              prior(normal(0, 1), class = "b"),
-                              prior(normal(-2.5, 1.5), class = "Intercept")
-                              #prior(exponential(1), class = "sd")
-                            ),
-                            save_pars = save_pars(all=TRUE),
-                            #sample_prior = 'only',
-                            family = bernoulli(link = "logit"),
-                            control = list(adapt_delta = 0.98)
-)
-
-activity_mod_EGS_GxS <- brm(formula = foraging_initiation ~
-                              ehc_z +
-                              group_size_binned +
-                              subject +
-                              group_size_binned:subject + 
-                              # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                              (1|ObsID) +
-                              (1|site) +
-                              (1|folder_date),
-                            data = foraging_initiation_data,
-                            chains = 4,
-                            cores = 4,
-                            iter = 4000,
-                            warmup = 2000,
-                            prior = c(
-                              prior(normal(0, 1), class = "b"),
-                              prior(normal(-2.5, 1.5), class = "Intercept")
-                              #prior(exponential(1), class = "sd")
-                            ),
-                            save_pars = save_pars(all=TRUE),
-                            #sample_prior = 'only',
-                            family = bernoulli(link = "logit"),
-                            control = list(adapt_delta = 0.98)
-)
-
-activity_mod_MSG_GxS <- brm(formula = foraging_initiation ~
-                              group_size_binned +
-                              subject +
-                              modifier_1 + 
-                              group_size_binned:subject + 
-                              # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                              (1|ObsID) +
-                              (1|site) +
-                              (1|folder_date),
-                            data = foraging_initiation_data,
-                            chains = 4,
-                            cores = 4,
-                            iter = 4000,
-                            warmup = 2000,
-                            prior = c(
-                              prior(normal(0, 1), class = "b"),
-                              prior(normal(-2.5, 1.5), class = "Intercept")
-                              #prior(exponential(1), class = "sd")
-                            ),
-                            save_pars = save_pars(all=TRUE),
-                            #sample_prior = 'only',
-                            family = bernoulli(link = "logit"),
-                            control = list(adapt_delta = 0.98)
-)
-
-activity_mod_MSG_MxS <- brm(formula = foraging_initiation ~
-                              group_size_binned +
-                              subject +
-                              modifier_1 + 
-                              modifier_1:subject + 
-                              # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                              (1|ObsID) +
-                              (1|site) +
-                              (1|folder_date),
-                            data = foraging_initiation_data,
-                            chains = 4,
-                            cores = 4,
-                            iter = 4000,
-                            warmup = 2000,
-                            prior = c(
-                              prior(normal(0, 1), class = "b"),
-                              prior(normal(-2.5, 1.5), class = "Intercept")
-                              #prior(exponential(1), class = "sd")
-                            ),
-                            save_pars = save_pars(all=TRUE),
-                            #sample_prior = 'only',
-                            family = bernoulli(link = "logit"),
-                            control = list(adapt_delta = 0.98)
-)
-
-activity_mod_MSG_GxM <- brm(formula = foraging_initiation ~
-                              group_size_binned +
-                              subject +
-                              modifier_1 + 
-                              group_size_binned:modifier_1 + 
-                              # ar(time = sec, gr = ObsID, p = 1, cov = TRUE) +
-                              (1|ObsID) +
-                              (1|site) +
-                              (1|folder_date),
-                            data = foraging_initiation_data,
-                            chains = 4,
-                            cores = 4,
-                            iter = 4000,
-                            warmup = 2000,
-                            prior = c(
-                              prior(normal(0, 1), class = "b"),
-                              prior(normal(-2.5, 1.5), class = "Intercept")
-                              #prior(exponential(1), class = "sd")
-                            ),
-                            save_pars = save_pars(all=TRUE),
-                            #sample_prior = 'only',
-                            family = bernoulli(link = "logit"),
-                            control = list(adapt_delta = 0.98)
-)
-
 activity_mod_ESsSExSsExSSxSExSxSs <- brm(formula = foraging_initiation ~
                       ehc_inverse_sd_z +
                       social_state +
@@ -1833,9 +686,8 @@ summary(activity_mod_ESsSExSsExSSxS)
 pp_check(activity_mod_ESsSExSsExSSxS, type = "bars")
 pp_check(activity_mod_ESsSExSsExSSxS, type="dens_overlay",ndraws=1000)
 
-summary(activity_mod)
-
-#plot species and ehc
+summary(activity_mod_ESsSExS)
+#plot
 newd <- data.frame(ehc_inverse_sd_z = rep(seq(min(foraging_initiation_data$ehc_inverse_sd_z), max(foraging_initiation_data$ehc_inverse_sd_z), length.out = 50), 4), subject = factor(rep(c("Surgeonfish","Parrotfish"), each = 100)), social_state = factor(rep(c("Social","Asocial"), each=50, times = 2)))
 pmu <- posterior_epred(activity_mod_ESsSExS, newdata = newd, re_formula=NA)
 
@@ -1892,127 +744,6 @@ preds |>
        y = "Probability initiating a foraging bout") +
   theme_classic(base_size = 14) +
   xlim(0,1)
-
-#plot group size and species
-# Prediction data for modifier 2
-pred_newd <- data.frame(
-  modifier_2_z = rep(
-    seq(
-      min(foraging_initiation_data$modifier_2_z),
-      max(foraging_initiation_data$modifier_2_z),
-      length.out = 50
-    ),
-    2
-  ),
-  subject = factor(
-    rep(c("Surgeonfish", "Parrotfish"), each = 50),
-    levels = c("Parrotfish", "Surgeonfish")
-  ),
-  ehc_inverse_sd_z = 0
-)
-
-# Posterior predictions
-pmu_avg <- posterior_epred(
-  activity_mod,
-  newdata = pred_newd,
-  re_formula = NA
-)
-
-# Posterior mean
-mnmu <- colMeans(pmu_avg)
-
-# 95% HPDI
-n <- ncol(pmu_avg)
-
-mean_intervals <- data.frame(
-  mulo95 = rep(NA, n),
-  muhi95 = rep(NA, n)
-)
-
-for (i in 1:n) {
-  mean_intervals[i, ] <- hpdi(
-    pmu_avg[, i],
-    prob = 0.95
-  )
-}
-
-# Combine
-preds <- cbind(
-  pred_newd,
-  mnmu,
-  mean_intervals
-)
-
-# Undo standardisation
-orig_mean <- attr(
-  foraging_initiation_data$modifier_2_z,
-  "scaled:center"
-)
-
-orig_sd <- attr(
-  foraging_initiation_data$modifier_2_z,
-  "scaled:scale"
-)
-
-preds$modifier_2 <- (
-  preds$modifier_2_z * orig_sd + orig_mean
-)
-
-# Plot
-preds |> 
-  ggplot() +
-  
-  geom_jitter(
-    data = foraging_initiation_data,
-    aes(
-      x = modifier_2,
-      y = foraging_initiation,
-      colour = subject
-    ),
-    alpha = 0.2,
-    size = 1,
-    height = 0.01
-  ) +
-  
-  geom_ribbon(
-    aes(
-      x = modifier_2,
-      ymin = mulo95,
-      ymax = muhi95,
-      fill = subject
-    ),
-    alpha = 0.4
-  ) +
-  
-  geom_line(
-    aes(
-      x = modifier_2,
-      y = mnmu,
-      colour = subject
-    ),
-    linewidth = 1
-  ) +
-  
-  labs(
-    x = "Group size",
-    y = "Probability initiating a foraging bout"
-  ) +
-  
-  scale_colour_manual(
-    values = c(
-      "Parrotfish" = "#E69F00",
-      "Surgeonfish" = "#0072B2"
-    )
-  ) +
-  
-  scale_fill_manual(
-    values = c(
-      "Parrotfish" = "#E69F00",
-      "Surgeonfish" = "#0072B2"
-    )
-  ) +
-  
-  theme_classic(base_size = 14)
 
 
 #DISTRIBUTION OF HRI PLOT#DISTRIBUTION OF HRI PLOTsubject
@@ -2414,142 +1145,73 @@ data.frame(ci, overlaps_zero)
 
 plot(bout_bites/bout_duration ~ as.factor(subject), data = foraging_bout_stats)
 
+#Distribution figures
+hri_data_f_distance <- hri_data_f %>%
+  select(frame.x, source_file.x, distance_bin_0_0_0_5m, distance_bin_0_5_1_0m, distance_bin_1_0_1_5m, distance_bin_1_5_2_0m)
 
-#Distribution
-#Heights
-hri_data_f_height_f <- full_data %>%
-  select(ObsID, hit_rate, miss_rate, frame.x, subject, starts_with("height")) %>%
-  mutate(hit_rate = as.numeric(hit_rate),
-          across(height_bin_0_0_0_2m:height_bin_3_6_3_8m, ~ as.numeric(as.character(.x))),
-         sum_bins = rowSums(across(height_bin_0_0_0_2m:height_bin_3_6_3_8m), na.rm=TRUE),
-         across(height_bin_0_0_0_2m:height_bin_3_6_3_8m, ~.x * (hit_rate/100) * 50000, .names = "ct_{.col}"))
+hri_data_f_distance <- pivot_longer(hri_data_f_distance, cols = starts_with("distance"), names_to = "distance_bin", values_to = "prop_distance") %>%
+  mutate(
+    distance_midpoint = case_when(
+      distance_bin == "distance_bin_0_0_0_5m"   ~ 0.25,
+      distance_bin == "distance_bin_0_5_1_0m"   ~ 0.75,
+      distance_bin == "distance_bin_1_0_1_5m"   ~ 1.25,
+      distance_bin == "distance_bin_1_5_2_0m"   ~ 1.75
+    )
+  )
 
+hri_data_f_height <- pivot_longer(hri_data_f_height, cols = starts_with("height"), names_to = "height_bin", values_to = "prop_height")
 
-hri_data_f_height_f_long <- hri_data_f_height_f %>%
-  select(!c(height_bin_0_0_0_2m:height_bin_3_6_3_8m, sum_bins)) %>%
-  pivot_longer(cols = c(ct_height_bin_0_0_0_2m:ct_height_bin_3_6_3_8m),
-               names_to = "Bins", values_to = "Counts", names_prefix = "ct_distance_bin_") %>%
-  mutate(Bins_num = as.numeric(as.factor(Bins))) %>%
-  mutate(Counts = round(Counts, 0),
-         Proportions = Counts / ((hit_rate/100)*50000)) %>%
-  mutate(Bins_center = case_when(
-             Bins_num == 1 ~ 0.1,
-             Bins_num == 2 ~ 0.3,
-             Bins_num == 3 ~ 0.5,
-             Bins_num == 4 ~ 0.7,
-             Bins_num == 5 ~ 0.9,
-             Bins_num == 6 ~ 1.1,
-             Bins_num == 7 ~ 1.3,
-             Bins_num == 8 ~ 1.4,
-             Bins_num == 9 ~ 1.5,
-             Bins_num == 10 ~ 1.7,
-             Bins_num == 11 ~ 1.9,
-             Bins_num == 12 ~ 2.1,
-             Bins_num == 13 ~ 2.3,
-             Bins_num == 14 ~ 2.5,
-             Bins_num == 15 ~ 2.7,
-             Bins_num == 16 ~ 2.9,
-             Bins_num == 17 ~ 3.1,
-             Bins_num == 18 ~ 3.3,
-             Bins_num == 19 ~ 3.5,
-           )) %>%
-  mutate(Bins_num = as.numeric(Bins_num))
+hri_data_f_height <- hri_data_f %>%  
+  select(frame.x, source_file.x, height_bin_0_0_0_2m, height_bin_0_2_0_4m, height_bin_0_4_0_6m, height_bin_0_6_0_8m, height_bin_0_8_1_0m, height_bin_1_0_1_2m, height_bin_1_2_1_4m, height_bin_1_4_1_6m, height_bin_1_6_1_8m, height_bin_1_8_2_0m, height_bin_2_0_2_2m) %>%
+  pivot_longer(cols = starts_with("height"), names_to = "height_bin", values_to = "prop_height") %>%
+  mutate(
+    height_midpoint = case_when(
+      height_bin == "height_bin_0_0_0_2m"   ~ 0.1,
+      height_bin == "height_bin_0_2_0_4m"   ~ 0.3,
+      height_bin == "height_bin_0_4_0_6m"   ~ 0.5,
+      height_bin == "height_bin_0_6_0_8m"   ~ 0.7,
+      height_bin == "height_bin_0_8_1_0m"   ~ 0.9,
+      height_bin == "height_bin_1_0_1_2m"   ~ 1.1,
+      height_bin == "height_bin_1_2_1_4m"   ~ 1.3,
+      height_bin == "height_bin_1_4_1_6m"   ~ 1.5,
+      height_bin == "height_bin_1_6_1_8m"   ~ 1.7,
+      height_bin == "height_bin_1_8_2_0m"   ~ 1.9,
+      height_bin == "height_bin_2_0_2_2m"   ~ 2.1
+    )
+  )
 
-#Distances
-hri_data_f_distance_f <- full_data %>%
-  select(ObsID, hit_rate, miss_rate, frame.x, subject, starts_with("distance")) %>%
-  mutate(hit_rate = as.numeric(hit_rate),
-         across(distance_bin_0_0_0_5m:distance_bin_1_5_2_0m, ~ as.numeric(as.character(.x))),
-         sum_bins = rowSums(across(distance_bin_0_0_0_5m:distance_bin_1_5_2_0m), na.rm=TRUE),
-         across(distance_bin_0_0_0_5m:distance_bin_1_5_2_0m, ~.x * (hit_rate/100) * 50000, .names = "ct_{.col}"))
+hri_data_f_distance %>%
+  ggplot(aes(x = as.factor(distance_midpoint), y = as.numeric(prop_distance), fill = as.factor(source_file.x), color = "black")) +
+  geom_bar(position = "stack", stat = "identity") +
+  theme_classic() + 
+  theme(legend.position="none") 
 
+hri_data_f_distance %>%
+  ggplot(aes(
+    x = as.factor(distance_midpoint),
+    y = as.numeric(prop_distance)
+  )) +
+  geom_boxplot(
+    width = 0.5,
+    outlier.shape = NA,
+    alpha = 0.3
+  ) +
+  geom_jitter(
+    width = 0.12,
+    alpha = 0.4,
+    size = 1.5
+  ) +
+  theme_classic() +
+  labs(
+    x = "Distance midpoint",
+    y = "Proportion"
+  )
 
-hri_data_f_distance_f_long <- hri_data_f_distance_f %>%
-  select(!c(distance_bin_0_0_0_5m:distance_bin_1_5_2_0m, sum_bins)) %>%
-  pivot_longer(cols = c(ct_distance_bin_0_0_0_5m:ct_distance_bin_1_5_2_0m),
-               names_to = "Bins", values_to = "Counts", names_prefix = "ct_distance_bin_") %>%
-  mutate(Bins_num = as.numeric(as.factor(Bins))) %>%
-  mutate(Counts = round(Counts, 0),
-         Proportions = Counts / ((hit_rate/100)*50000)) %>%
-  mutate(Bins_center = case_when(
-    Bins_num == 1 ~ 0.25,
-    Bins_num == 2 ~ 0.75,
-    Bins_num == 3 ~ 1.25,
-    Bins_num == 4 ~ 1.75
-  )) %>%
-  mutate(Bins_num = as.numeric(Bins_num))
-
-
-#Hit rate
-per_frame <- hri_data_f_distance_f_long %>%
-  group_by(ObsID, frame.x) %>%
-  reframe(hit_rate = first(hit_rate), subject = first(subject)) %>%
-  mutate(frame.x = as.numeric(frame.x), ObsID = as.factor(ObsID))
-
-#hit rate densities per trial
-dist.hits <- ggplot(data = per_frame) +
-  geom_density(aes(x = hit_rate, color = as.factor(subject), group = ObsID), fill = NA) +
-  labs(x = "Hit Rate", y = "Density") +
-  theme_classic(base_size = 14) +
-  theme(legend.position = "none") 
-ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/hit_rate.png", plot = dist.hits, width = 10, height = 5)
-
-#hit rate across the trial
-ggplot(per_frame, aes(x = frame.x, y = hit_rate, color = as.factor(ObsID))) +
-  geom_line(aes(group = ObsID, alpha = 0.1)) +
-  labs(x = "Frame", y = "Hit Rate") +
-  theme_classic(base_size = 14)
-
-dist.bins <- ggplot(data = hri_data_f_distance_f_long) +
-  geom_boxplot(aes(x = Bins, y = Counts), fill = NA) +
-  geom_point(aes(x = Bins, y = Counts, color = as.factor(ObsID))) +
-  theme_classic()
-dist.bins
-
-#Hit heights
-height.dens <- ggplot(data = hri_data_f_height_f_long %>% filter(!is.na(Counts))) +
-  geom_density(aes(x = Bins_center, weight = Counts, color = as.factor(subject), group = ObsID), fill = NA) +
-  # scale_x_continuous(breaks = seq(0.25, 2, 0.5)) +
-  scale_y_continuous(breaks = seq(0, 6, 0.1)) +
-  labs(x = "Hit heights (m)", y = "Density") +
-  xlim(c(0,2)) +
-  theme_classic(base_size = 14) +
-  theme(legend.position = "none") 
-height.dens
-ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/height.dens.png", plot = height.dens, width = 10, height = 5)
-
-
-#Hit distances
-dist.dens <- ggplot(data = hri_data_f_distance_f_long %>% filter(!is.na(Counts))) +
-  geom_density(aes(x = Bins_center, weight = Counts, color = as.factor(subject), group = ObsID), fill = NA, bw = 0.3) +
-  # scale_x_continuous(breaks = seq(0.25, 2, 0.5)) +
-  scale_y_continuous(breaks = seq(0, 6, 0.1)) +
-  labs(x = "Hit distances (m)", y = "Density") +
-  #xlim(c(0.25,2)) +
-  theme_classic(base_size = 14) +
-  theme(legend.position = "none") 
-dist.dens
-ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/dist.dens.png", plot = dist.dens, width = 10, height = 5)
-
-#EHC
-ehc <- full_data %>%
-  ggplot(aes(x = ehc, group = as.factor(ObsID), color = as.factor(subject))) + 
-  geom_density() +
-  #xlim(0,5) +
-  labs(x = "Experienced Habitat Complexity", y = "Density") +
-  theme_classic(base_size = 14) +
-  theme(legend.position = "none") 
-
-ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/ehc.png", plot = ehc, width = 10, height = 5)
-
-  
-ehc_inverse_sd <- full_data %>%
-  ggplot(aes(x = ehc_inverse_sd, group = as.factor(ObsID), color = as.factor(subject))) + 
-  geom_density() +
-  #xlim(0,5) +
-  labs(x = "Experienced Habitat Complexity", y = "Density") +
-  theme_classic(base_size = 14) +
-  theme(legend.position = "none") 
-ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/ehc_inverse_sd.png", plot = ehc_inverse_sd, width = 10, height = 5)
+#Height
+hri_data_f_height %>%
+  ggplot(aes(x = as.numeric(height_midpoint), y = as.numeric(prop_height), color = as.factor(source_file.x))) +
+  geom_line() +
+  theme_classic() + 
+  theme(legend.position="none") 
 
 
