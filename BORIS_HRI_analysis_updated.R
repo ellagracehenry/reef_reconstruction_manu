@@ -53,6 +53,15 @@ hri_data$ObsID <- as.numeric(str_extract_all(str_sub(hri_data$source_file, start
 
 length(unique(hri_data$ObsID))
 
+#RUGOSITY output
+setwd("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/data/rugosities")
+csv_files <- list.files(pattern = "\\.csv$")
+
+rugosity_data <- lapply(csv_files, read_and_clean) %>% bind_rows()
+rugosity_data$ObsID <- as.numeric(str_extract_all(str_sub(rugosity_data$source_file, start = 11, end = 13), "\\d+"))
+
+length(unique(rugosity_data$ObsID))
+
 #MVT output - read in frame numbers and reconstruction/reprojection error
 setwd("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/data/BORIS/frame_idx")
 csv_files1 <- list.files(pattern = "\\.csv$")
@@ -70,11 +79,24 @@ boris23_timeline <- boris23_timeline %>%
   arrange(Trial_ID, sec) %>%
   group_by(Trial_ID, subject) %>%
   mutate(
-    bout = cumsum(activity_state != lag(activity_state, default = first(activity_state))))%>%
+    sec_diff_before = sec - lag(sec, default = first(sec)),
+    sec_diff_after = lead(sec, default = last(sec)) - sec,
+    bout = cumsum(activity_state != lag(activity_state, default = first(activity_state))),
+    bout_cons = cumsum(
+      activity_state != lag(activity_state, default = first(activity_state)) |
+        (sec - lag(sec, default = first(sec))) > 5) 
+  ) %>%
+  group_by(Trial_ID, subject, bout_cons) %>%
+  mutate(
+    gap_before_bout = first(sec_diff_before) > 5,          # gap before bout starts
+    gap_after_bout  = last(sec_diff_after) > 5,  # gap after bout ends
+    certain = !gap_before_bout & !gap_after_bout
+  ) %>%
   ungroup()
 
 #Correct frame number for HRI
 hri_data <- left_join(frame_idx_data, hri_data, by = c("ObsID", "n"))
+hri_data <- left_join(rugosity_data, hri_data, by = c("ObsID", "n"))
 
 hri_data$reconstruction_error <- as.numeric(hri_data$reconstruction_error)
 hri_data$reprojection_error <- as.numeric(hri_data$reprojection_error)
@@ -89,15 +111,9 @@ hri_data$hit_rate <- as.numeric(hri_data$hit_rate)
 
 hri_data_f <- hri_data %>%
   filter(reprojection_error < 10) %>% #DECIDE ON RERPROJEC ERR CUT OFF 0.0246423
-  filter(min_hit_distance > 0.01) %>% #DECIDE ON DIST CUT OFF. 0.0464548
-  filter(hit_rate < 100) #0.0004273504
+  filter(min_hit_distance > 0.01) %>% #DECIDE ON DIST CUT OFF. 0.0464548 14040
+  filter(hit_rate < 85) #0.0052707
   
-#14724
-1-14724/15096
-1-14040/14724
-1-13358/14724
-(1-14034/14040)
-
 hri_data_f$ehc_constant_cv <- as.numeric(hri_data_f$ehc_constant_cv)
 hri_data_f$ehc_constant_sd <- as.numeric(hri_data_f$ehc_constant_sd)
 hri_data_f$ehc_inverse_cv <- as.numeric(hri_data_f$ehc_inverse_cv)
@@ -107,8 +123,7 @@ hri_data_f$ehc_add_sd <- as.numeric(hri_data_f$ehc_add_sd)
 hri_data_f$ehc_sd <- as.numeric(hri_data_f$ehc_sd)
 hri_data_f$cv <- as.numeric(hri_data_f$cv)
 hri_data_f$sd <- as.numeric(hri_data_f$sd)
-
-
+hri_data_f$ehc_height_only <- hri_data_f$avg_norm_height*(hri_data_f$hit_rate/100)
 
 
 full_data <- left_join(boris23_timeline, hri_data_f, by = c("ObsID","frame_n"))
@@ -320,26 +335,35 @@ stripped_data %>%
 #high HRI points are legit - EH30, 195, EH40, 162
 
 #Bout dataframe
+full_data <- full_data %>%
+  group_by(Trial_ID) %>%
+  mutate(sec_diff = lead(sec) - sec)
+
+check_non_cont <- full_data %>%
+  filter(sec_diff > 5)
 
 bout_stats <- full_data %>%
-  group_by(Trial_ID, bout, subject, folder_date, site, social_state
+  group_by(Trial_ID, bout_cons, subject, folder_date, site, social_state # BOUT OR BOUT CONS (NEW BOUT IF GAP OF MORE THAN 5 S)
            #,modifiers
   ) %>%
   reframe(
     bout_type = first(activity_state),
-    bout_duration = n(),                             # seconds in bout
-    bout_bites = sum(Bites),                         # total bites taken
+    bout_duration = max(sec) - min(sec) + 1,                             # seconds in bout
+    bout_bites = sum(Seafloor_bites),                         # total bites taken
     bout_bite_rate = bout_bites / bout_duration,               # bites per second
     bout_ehc = mean(ehc, na.rm=TRUE), 
     bout_ehc_inverse_sd = mean(ehc_inverse_sd, na.rm=TRUE),
     bout_sd = mean(sd, na.rm=TRUE),
     bout_modifier_1 = first(modifier_1),
     bout_modifier_2 = mean(modifier_2, na.rm=TRUE),
+    certain = first(certain),
     .groups = "drop"
   ) %>%
   mutate(bout_ehc_z = scale(bout_ehc), 
              bout_ehc_inverse_sd_z = scale(bout_ehc_inverse_sd),
              bout_sd_z = scale(bout_sd))
+
+hist(bout_stats$bout_duration[bout_stats$certain == FALSE])
 
 #Now scale the predictor variables for stability
 bout_stats$bout_ehc_inverse_sd_z <- scale(bout_stats$bout_hri)
@@ -347,16 +371,11 @@ stripped_data$ehc_inverse_sd_z <- scale(stripped_data$ehc_inverse_sd)
 stripped_data$activity_state <- as.factor(stripped_data$activity_state)
 stripped_data$social_state <- as.factor(stripped_data$social_state)
 
-
-
-
-
-
 #Making traversing foraging initation dataframe
 # Summarise bite types across each complete foraging bout
 bout_summary <- full_data %>%
  filter(activity_state == "Foraging") %>%
-  group_by(ObsID, bout) %>%
+  group_by(ObsID, bout_cons) %>%
   summarise(
     seafloor_bout = as.integer(
       any(Seafloor_bites > 0, na.rm = TRUE)
@@ -2634,13 +2653,20 @@ ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figur
 per_frame <- per_frame |>
   dplyr::mutate(subject = forcats::fct_relevel(as.factor(subject), "Surgeonfish"))
 
+per_frame_means <- per_frame %>%
+  group_by(subject) %>%
+  summarise(mean_hit_rate = mean(hit_rate, na.rm=TRUE))
+
 hist_hit_rate <- per_frame %>%
   dplyr::arrange(desc(subject)) |> 
   ggplot() +
   geom_histogram(aes(x = hit_rate, y = after_stat(density), fill = as.factor(subject)), alpha = 0.3, position = "identity") +
   scale_fill_manual(values = c("Parrotfish" = "#F8766D", "Surgeonfish" = "#00BFC4")) +
   labs(x = "Hit Rate", y = "Density") +
+  geom_vline(xintercept = per_frame_means$mean_hit_rate[per_frame_means$subject == "Parrotfish"], colour = "#F8766D") +
+  geom_vline(xintercept = per_frame_means$mean_hit_rate[per_frame_means$subject == "Surgeonfish"], colour = "#00BFC4") +
   theme_classic(base_size = 14) +
+  coord_cartesian(xlim = c(0,1))+
   theme(legend.position = "none")
 ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/hist_hit_rate.png", plot = hist_hit_rate, width = 10, height = 5)
 
@@ -2746,6 +2772,35 @@ ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figur
 
 
 #FIGS
+per_frame <- per_frame |>
+  dplyr::mutate(subject = forcats::fct_relevel(as.factor(subject), "Surgeonfish"))
+
+per_frame_means <- per_frame %>%
+  group_by(subject) %>%
+  summarise(mean_hit_rate = median(hit_rate, na.rm=TRUE))
+
+hist_hit_rate <- per_frame %>%
+  dplyr::arrange(desc(subject)) |> 
+  ggplot() +
+  geom_histogram(aes(x = hit_rate, y = after_stat(density), fill = as.factor(subject)), alpha = 0.3, position = "identity") +
+  scale_fill_manual(values = c("Parrotfish" = "#F8766D", "Surgeonfish" = "#00BFC4")) +
+  labs(x = "Hit Rate", y = "Density") +
+  geom_vline(xintercept = per_frame_means$mean_hit_rate[per_frame_means$subject == "Parrotfish"], colour = "#F8766D") +
+  geom_vline(xintercept = per_frame_means$mean_hit_rate[per_frame_means$subject == "Surgeonfish"], colour = "#00BFC4") +
+  theme_classic(base_size = 14) +
+  coord_cartesian(xlim = c(0,1))+
+  theme(legend.position = "none")
+ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/hist_hit_rate.png", plot = hist_hit_rate, width = 10, height = 5)
+
+weighted_means <- hri_data_f_height_f_long |>
+  dplyr::filter(!is.na(Counts)) |>
+  dplyr::group_by(subject) |>
+  dplyr::summarise(
+    weighted_mean = weighted.median(Bins_center, Counts, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+max(hri_data_f_height_f_long$Bins_center[hri_data_f_height_f_long$Counts > 0], na.rm=TRUE)
 hist_hit_height <- hri_data_f_height_f_long |>
   dplyr::filter(!is.na(Counts)) |>
   dplyr::arrange(desc(subject)) |>
@@ -2760,12 +2815,23 @@ hist_hit_height <- hri_data_f_height_f_long |>
            position = "identity",
            width = 0.04) +
   scale_fill_manual(values = c("Parrotfish" = "#F8766D", "Surgeonfish" = "#00BFC4")) +
-  xlim(c(0, 2)) +
+  geom_vline(xintercept = weighted_means$weighted_mean[weighted_means$subject == "Parrotfish"], colour = "#F8766D") +
+  geom_vline(xintercept = weighted_means$weighted_mean[weighted_means$subject == "Surgeonfish"], colour = "#00BFC4") +
+  coord_cartesian(xlim = c(0,2.3))+
   labs(x = "Hit Height (m)", y = "Density") +
   theme_classic(base_size = 14) +
   theme(legend.position = "none")
-
+hist_hit_height
 ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/hist_hit_height.png", plot = hist_hit_height, width = 10, height = 5)
+
+max(hri_data_f_distance_f_long$Bins_center[hri_data_f_distance_f_long$Counts > 0], na.rm=TRUE)
+weighted_means <- hri_data_f_distance_f_long |>
+  dplyr::filter(!is.na(Counts)) |>
+  dplyr::group_by(subject) |>
+  dplyr::summarise(
+    weighted_mean = weighted.median(Bins_center, Counts, na.rm = TRUE),
+    .groups = "drop"
+  )
 
 hist_hit_dist <- hri_data_f_distance_f_long |>
   dplyr::filter(!is.na(Counts)) |>
@@ -2781,13 +2847,43 @@ hist_hit_dist <- hri_data_f_distance_f_long |>
            position = "identity",
            width = 0.05) +
   scale_fill_manual(values = c("Parrotfish" = "#F8766D", "Surgeonfish" = "#00BFC4")) +
+  geom_vline(xintercept = weighted_means$weighted_mean[weighted_means$subject == "Parrotfish"], colour = "#F8766D") +
+  geom_vline(xintercept = weighted_means$weighted_mean[weighted_means$subject == "Surgeonfish"], colour = "#00BFC4") +
   labs(x = "Hit Distance (m)", y = "Density") +
   theme_classic(base_size = 14) +
   theme(legend.position = "none")
-
+hist_hit_dist
 ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/hist_hit_dist.png", plot = hist_hit_dist, width = 10, height = 5)
 
+#NORMAL EHC
+
+full_data_ehc_means <- full_data %>%
+  group_by(subject) %>%
+  summarise(mean_ehc = median(ehc, na.rm=TRUE))
+
 hist_ehc <- full_data |>
+  dplyr::arrange(desc(subject)) |>
+  dplyr::mutate(subject = as.factor(subject)) |>
+  ggplot() +
+  geom_histogram(aes(x = ehc, y = after_stat(density), fill = subject),
+                 alpha = 0.3,
+                 position = "identity",
+                 bins = 40) +
+  scale_fill_manual(values = c("Parrotfish" = "#F8766D", "Surgeonfish" = "#00BFC4")) +
+  geom_vline(xintercept = full_data_ehc_means$mean_ehc[full_data_ehc_means$subject == "Parrotfish"], colour = "#F8766D") +
+  geom_vline(xintercept = full_data_ehc_means$mean_ehc[full_data_ehc_means$subject == "Surgeonfish"], colour = "#00BFC4") +
+  labs(x = "Experienced Habitat Complexity", y = "Density") +
+  theme_classic(base_size = 14) +
+  theme(legend.position = "none")
+hist_ehc 
+ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/hist_ehc.png", plot = hist_ehc, width = 10, height = 5)
+
+
+full_data_log_ehc_means <- full_data %>%
+  group_by(subject) %>%
+  summarise(mean_log_ehc = mean(log_ehc, na.rm=TRUE))
+
+hist_log_ehc <- full_data |>
   dplyr::arrange(desc(subject)) |>
   dplyr::mutate(subject = as.factor(subject)) |>
   ggplot() +
@@ -2796,8 +2892,56 @@ hist_ehc <- full_data |>
                  position = "identity",
                  bins = 40) +
   scale_fill_manual(values = c("Parrotfish" = "#F8766D", "Surgeonfish" = "#00BFC4")) +
-  labs(x = "Experienced Habitat Complexity (log)", y = "Density") +
+  geom_vline(xintercept = full_data_log_ehc_means$mean_log_ehc[full_data_log_ehc_means$subject == "Parrotfish"], colour = "#F8766D") +
+  geom_vline(xintercept = full_data_log_ehc_means$mean_log_ehc[full_data_log_ehc_means$subject == "Surgeonfish"], colour = "#00BFC4") +
+  labs(x = "Log Experienced Habitat Complexity", y = "Density") +
   theme_classic(base_size = 14) +
   theme(legend.position = "none")
-hist_ehc 
-ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/hist_ehc.png", plot = hist_ehc, width = 10, height = 5)
+hist_log_ehc 
+ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/hist_log_ehc.png", plot = hist_log_ehc, width = 10, height = 5)
+
+
+
+#HEIGHT EHC
+full_data_ehc_height_only_means <- full_data %>%
+  group_by(subject) %>%
+  summarise(mean_ehc_height_only = median(ehc_height_only, na.rm=TRUE))
+
+hist_ehc_height_only <- full_data |>
+  dplyr::arrange(desc(subject)) |>
+  dplyr::mutate(subject = as.factor(subject)) |>
+  ggplot() +
+  geom_histogram(aes(x = ehc_height_only, y = after_stat(density), fill = subject),
+                 alpha = 0.3,
+                 position = "identity",
+                 bins = 40) +
+  scale_fill_manual(values = c("Parrotfish" = "#F8766D", "Surgeonfish" = "#00BFC4")) +
+  geom_vline(xintercept = full_data_ehc_height_only_means$mean_ehc_height_only[full_data_ehc_height_only_means$subject == "Parrotfish"], colour = "#F8766D") +
+  geom_vline(xintercept = full_data_ehc_height_only_means$mean_ehc_height_only[full_data_ehc_height_only_means$subject == "Surgeonfish"], colour = "#00BFC4") +
+  labs(x = "Experienced Habitat Complexity (height only)", y = "Density") +
+  theme_classic(base_size = 14) +
+  theme(legend.position = "none")
+hist_ehc_height_only 
+ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/hist_ehc_height_only.png", plot = hist_ehc_height_only, width = 10, height = 5)
+
+
+full_data_ehc_height_only_means <- full_data %>%
+  group_by(subject) %>%
+  summarise(mean_log_ehc_height_only = median(log_ehc_height_only, na.rm=TRUE))
+
+hist_log_ehc_height_only <- full_data |>
+  dplyr::arrange(desc(subject)) |>
+  dplyr::mutate(subject = as.factor(subject)) |>
+  ggplot() +
+  geom_histogram(aes(x = log_ehc_height_only, y = after_stat(density), fill = subject),
+                 alpha = 0.3,
+                 position = "identity",
+                 bins = 40) +
+  scale_fill_manual(values = c("Parrotfish" = "#F8766D", "Surgeonfish" = "#00BFC4")) +
+  geom_vline(xintercept = full_data_ehc_height_only_means$mean_log_ehc_height_only[full_data_ehc_height_only_means$subject == "Parrotfish"], colour = "#F8766D") +
+  geom_vline(xintercept = full_data_ehc_height_only_means$mean_log_ehc_height_only[full_data_ehc_height_only_means$subject == "Surgeonfish"], colour = "#00BFC4") +
+  labs(x = "Log Experienced Habitat Complexity (height only)", y = "Density") +
+  theme_classic(base_size = 14) +
+  theme(legend.position = "none")
+hist_log_ehc_height_only
+ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/hist_log_ehc_height_only.png", plot = hist_log_ehc_height_only, width = 10, height = 5)

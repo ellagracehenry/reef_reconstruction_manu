@@ -24,6 +24,17 @@ full_data$ehc_squared_z <- as.numeric((full_data$ehc)^2)
 full_data$log_ehc_z <- scale(log(full_data$ehc))
 full_data$log_ehc <- log(full_data$ehc)
 full_data$log_ehc_z_squared <- full_data$log_ehc_z^2
+full_data$log_height <- log(full_data$avg_norm_height)
+full_data$log_ehc_height_only <- log(full_data$ehc_height_only)
+full_data$log_ehc_height_only_z <- scale(log(full_data$ehc_height_only))
+full_data$avg_distance_z <- scale(full_data$avg_distance)
+full_data$avg_norm_height_z <- scale(full_data$avg_norm_height)
+full_data$hit_rate_z <- scale(full_data$hit_rate)
+full_data$log_avg_distance_z <- scale(log(full_data$avg_distance))
+full_data$log_avg_norm_height_z <- scale(log(full_data$avg_norm_height))
+full_data$log_avg_distance <- log(full_data$avg_distance)
+full_data$log_avg_norm_height <- log(full_data$avg_norm_height)
+
 
 full_data <- full_data %>%
   mutate(
@@ -59,14 +70,18 @@ full_data_strip <- full_data_strip %>%
 table(full_data_strip$group_type)
 full_data_strip$social_type <- as.factor(full_data_strip$social_type)
 
+colnames(full_data_strip)
+class(full_data_strip$social_state)
 
-
+full_data_strip_floor <- full_data_strip %>% 
+  
 #MODELS
 ###1 - Seafloor bites ~ ehc, family, social vs asocial
 class(full_data_strip$social_state)
+class(full_data_strip$Seafloor_bites_binary)
 seafloor_bites_model <- brm(
   formula = Seafloor_bites_binary ~
-    log_ehc_z*subject*social_state +
+    log_ehc_height_only_z*subject*social_state +
     (1 | Trial_ID) +
     (1 | site) +
     (1 | folder_date),
@@ -88,7 +103,7 @@ seafloor_bites_model <- brm(
   
   #sample_prior = "only",
   
-  family = bernoulli(link = "logit"),
+  family = brms::bernoulli(link = "logit"),
   
   control = list(
     adapt_delta = 0.99
@@ -110,10 +125,10 @@ saveRDS(seafloor_bites_model, file = "seafloor_bites_model.rds")
 pred_newd <- full_data_strip |>
   dplyr::group_by(subject, social_state) |>
   dplyr::summarise(
-    log_ehc_z = list(seq(min(log_ehc_z), max(log_ehc_z), length.out = 50)),
+    log_ehc_height_only_z = list(seq(min(log_ehc_height_only_z), max(log_ehc_height_only_z), length.out = 50)),
     .groups = "drop"
   ) |>
-  tidyr::unnest(log_ehc_z)
+  tidyr::unnest(log_ehc_height_only_z)
 observed_combinations <- full_data_strip |>
   dplyr::distinct(subject, social_state)
 pred_newd <- pred_newd |>
@@ -133,15 +148,15 @@ preds <- cbind(
 )
 names(preds)[names(preds) == "1"] <- "mulo95"
 names(preds)[names(preds) == "2"] <- "muhi95"
-orig_mean <- attr(full_data_strip$log_ehc_z, "scaled:center")
-orig_sd <- attr(full_data_strip$log_ehc_z, "scaled:scale")
-preds$log_ehc <- preds$log_ehc_z * orig_sd + orig_mean
+orig_mean <- attr(full_data_strip$log_ehc_height_only_z, "scaled:center")
+orig_sd <- attr(full_data_strip$log_ehc_height_only_z, "scaled:scale")
+preds$log_ehc_height_only <- preds$log_ehc_height_only_z * orig_sd + orig_mean
 bites_social_state <- preds |>
   ggplot() +
   geom_jitter(
     data = full_data_strip,
     aes(
-      x = log_ehc,
+      x = log_ehc_height_only,
       y = Seafloor_bites_binary,
       color = social_state
     ),
@@ -151,7 +166,7 @@ bites_social_state <- preds |>
   ) +
   geom_ribbon(
     aes(
-      x = log_ehc,
+      x = log_ehc_height_only,
       ymin = mulo95,
       ymax = muhi95,
       fill = social_state
@@ -160,7 +175,7 @@ bites_social_state <- preds |>
   ) +
   geom_line(
     aes(
-      x = log_ehc,
+      x = log_ehc_height_only,
       y = mnmu,
       color = social_state
     ),
@@ -172,7 +187,7 @@ bites_social_state <- preds |>
     y = "Probability of biting"
   ) +
   theme_classic(base_size = 24)
-
+bites_social_state
 ggsave("/Users/ellag/Desktop/PhD/academic_projects/3d_reconstruction/paper/figures/bites_social_state.png", plot = bites_social_state, width = 10, height = 5)
 
 
@@ -551,32 +566,78 @@ decision_data <- full_data %>%
     next_sec = lead(sec),
     next_log_ehc = lead(log_ehc),
     next_social_state = lead(social_state), 
+    next_log_height = lead(log_height),
+    next_hit_rate = lead(hit_rate),
+    next_avg_distance = lead(avg_distance),
+    next_avg_norm_height = lead(avg_norm_height),
+    log_next_avg_distance = lead(log_avg_distance),
+    log_next_avg_norm_height = lead(log_avg_norm_height),
+    next_local_rugosity = lead(local_rugosity),
+    next_relief = lead(relief),
     
-    next_state_different = as.integer(
+    next_state_different = as.integer( 
       activity_state != next_activity &
         next_sec == sec + 1
-    )
+    ),
+    time_in_state = ave(seq_along(sec), bout_cons, FUN = seq_along) # find conservative bout code and cumulative time in state along seconds in conservative bout
   ) %>%
-  ungroup() %>%
-  filter(
-    activity_state == "Traversing/swimming" & !is.na(next_activity) & next_sec == sec + 1 & !is.na(next_log_ehc)) 
+  ungroup() 
+test <- decision_data %>%
+  dplyr::select(ObsID, sec, time_in_state, activity_state)
 
 decision_data$next_social_state <- as.factor(decision_data$next_social_state)
 decision_data$next_log_ehc_z <- scale(decision_data$next_log_ehc)
+decision_data$next_local_rugosity_z <- scale(decision_data$next_local_rugosity)
+decision_data$next_relief_z <- scale(decision_data$next_relief)
+
+decision_data$next_hit_rate_z <- scale(decision_data$next_hit_rate)
+decision_data$next_avg_distance_z <- scale(decision_data$next_avg_distance)
+decision_data$next_avg_norm_height_z <- scale(decision_data$next_avg_norm_height)
+decision_data$log_next_avg_distance_z <- scale(decision_data$log_next_avg_distance)
+decision_data$log_next_avg_norm_height_z <- scale(decision_data$log_next_avg_norm_height)
+
 decision_data$next_state_different <- as.numeric(decision_data$next_state_different)
 decision_data$subject <- as.factor(decision_data$subject)
 
 decision_data <- decision_data |>
   tidyr::drop_na(ehc_z, next_log_ehc_z, subject, next_social_state, social_state) 
 
+decision_data_foraging_init  <- decision_data %>%
+  filter(
+    activity_state == "Traversing/swimming" & !is.na(next_activity) & next_sec == sec + 1 & !is.na(next_log_ehc)) #checking every row has a second straight after
+
+decision_data_traverse_init  <- decision_data %>%
+  filter(
+    activity_state == "Foraging" & !is.na(next_activity) & next_sec == sec + 1 & !is.na(next_log_ehc)) #checking every row has a second straight after
+
+
+decision_data_trunc <- decision_data %>% #filter out the two bouts which are longer than 100 (outliers)
+  group_by(bout_cons) %>%
+  filter(max(time_in_state) < 100) %>%
+  ungroup() 
+  
+  #could plot
 decision_data %>%
-    ggplot(aes(x = next_log_ehc_z, y = next_state_different)) +
+    ggplot(aes(x = next_log_height_z, y = next_state_different)) +
     geom_point() +
     geom_smooth()
 
+min(decision_data$avg_norm_height)
+bout_length<- decision_data %>%
+  group_by(ObsID, bout_cons) %>%
+  #filter(max(time_in_state) < 100) %>%
+  summarise(max_time = max(time_in_state))
+
+hist(bout_length$max_time)
+class(decision_data$next_state_different)
+
+table(decision_data$next_state_different) #very few next state different. check if valid
+decision_data$avg_norm_height_z <- scale(decision_data$avg_norm_height)
+summary(decision_data$avg_norm_height_z) 
+
 foraging_initiation_model <- brm(
   formula = next_state_different ~
-    next_log_ehc_z*subject*next_social_state +
+    next_log_height_z*subject*next_social_state + time_in_state +
     (1 | Trial_ID) +
     (1 | site) +
     (1 | folder_date),
@@ -598,7 +659,7 @@ foraging_initiation_model <- brm(
   
   #sample_prior = "only",
   
-  family = bernoulli(link = "logit"),
+  family = brms::bernoulli(),
   
   control = list(
     adapt_delta = 0.99
@@ -700,7 +761,8 @@ decision_data <- full_data %>%
     next_state_different = as.integer(
       activity_state != next_activity &
         next_sec == sec + 1
-    )
+    ), 
+    time_in_state = ave(seq_along(sec), bout, FUN = seq_along)
   ) %>%
   ungroup() %>%
   filter(
@@ -712,7 +774,7 @@ decision_data$next_state_different <- as.numeric(decision_data$next_state_differ
 decision_data$subject <- as.factor(decision_data$subject)
 
 decision_data %>%
-  ggplot(aes(x = next_log_ehc_z, y = next_state_different)) +
+  ggplot(aes(x = time_in_state, y = next_state_different)) +
   geom_point() +
   geom_smooth()
 
